@@ -49,6 +49,7 @@ export class ProcessingHelper {
   private openaiClient: OpenAI | null = null
   private geminiApiKey: string | null = null
   private anthropicClient: Anthropic | null = null
+  private lmstudioClient: OpenAI | null = null  // LM Studio uses OpenAI-compatible API
 
   // AbortControllers for API requests
   private currentProcessingAbortController: AbortController | null = null
@@ -57,56 +58,49 @@ export class ProcessingHelper {
   constructor(deps: IProcessingHelperDeps) {
     this.deps = deps
     this.screenshotHelper = deps.getScreenshotHelper()
-    
+
     // Initialize AI client based on config
     this.initializeAIClient();
-    
+
     // Listen for config changes to re-initialize the AI client
     configHelper.on('config-updated', () => {
       this.initializeAIClient();
     });
   }
-  
+
   /**
    * Initialize or reinitialize the AI client with current config
    */
   private initializeAIClient(): void {
     try {
       const config = configHelper.loadConfig();
-      
+
+      // Reset all clients first
+      this.openaiClient = null;
+      this.geminiApiKey = null;
+      this.anthropicClient = null;
+      this.lmstudioClient = null;
+
       if (config.apiProvider === "openai") {
         if (config.apiKey) {
-          this.openaiClient = new OpenAI({ 
+          this.openaiClient = new OpenAI({
             apiKey: config.apiKey,
             timeout: 60000, // 60 second timeout
             maxRetries: 2   // Retry up to 2 times
           });
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
           console.log("OpenAI client initialized successfully");
         } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
           console.warn("No API key available, OpenAI client not initialized");
         }
-      } else if (config.apiProvider === "gemini"){
+      } else if (config.apiProvider === "gemini") {
         // Gemini client initialization
-        this.openaiClient = null;
-        this.anthropicClient = null;
         if (config.apiKey) {
           this.geminiApiKey = config.apiKey;
           console.log("Gemini API key set successfully");
         } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
           console.warn("No API key available, Gemini client not initialized");
         }
       } else if (config.apiProvider === "anthropic") {
-        // Reset other clients
-        this.openaiClient = null;
-        this.geminiApiKey = null;
         if (config.apiKey) {
           this.anthropicClient = new Anthropic({
             apiKey: config.apiKey,
@@ -115,17 +109,25 @@ export class ProcessingHelper {
           });
           console.log("Anthropic client initialized successfully");
         } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
           console.warn("No API key available, Anthropic client not initialized");
         }
+      } else if (config.apiProvider === "lmstudio") {
+        // LM Studio uses OpenAI-compatible API
+        const endpoint = config.lmstudioEndpoint || "http://localhost:1234/v1";
+        this.lmstudioClient = new OpenAI({
+          baseURL: endpoint,
+          apiKey: "lm-studio", // LM Studio doesn't require a real API key
+          timeout: 120000, // 2 minute timeout for local models (slower)
+          maxRetries: 1
+        });
+        console.log(`LM Studio client initialized with endpoint: ${endpoint}`);
       }
     } catch (error) {
       console.error("Failed to initialize AI client:", error);
       this.openaiClient = null;
       this.geminiApiKey = null;
       this.anthropicClient = null;
+      this.lmstudioClient = null;
     }
   }
 
@@ -166,7 +168,7 @@ export class ProcessingHelper {
       if (config.language) {
         return config.language;
       }
-      
+
       // Fallback to window variable if config doesn't have language
       const mainWindow = this.deps.getMainWindow()
       if (mainWindow) {
@@ -187,7 +189,7 @@ export class ProcessingHelper {
           console.warn("Could not get language from window", err);
         }
       }
-      
+
       // Default fallback
       return "python";
     } catch (error) {
@@ -201,11 +203,11 @@ export class ProcessingHelper {
     if (!mainWindow) return
 
     const config = configHelper.loadConfig();
-    
+
     // First verify we have a valid AI client
     if (config.apiProvider === "openai" && !this.openaiClient) {
       this.initializeAIClient();
-      
+
       if (!this.openaiClient) {
         console.error("OpenAI client not initialized");
         mainWindow.webContents.send(
@@ -215,7 +217,7 @@ export class ProcessingHelper {
       }
     } else if (config.apiProvider === "gemini" && !this.geminiApiKey) {
       this.initializeAIClient();
-      
+
       if (!this.geminiApiKey) {
         console.error("Gemini API key not initialized");
         mainWindow.webContents.send(
@@ -226,9 +228,20 @@ export class ProcessingHelper {
     } else if (config.apiProvider === "anthropic" && !this.anthropicClient) {
       // Add check for Anthropic client
       this.initializeAIClient();
-      
+
       if (!this.anthropicClient) {
         console.error("Anthropic client not initialized");
+        mainWindow.webContents.send(
+          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
+        );
+        return;
+      }
+    } else if (config.apiProvider === "lmstudio" && !this.lmstudioClient) {
+      // Add check for LM Studio client
+      this.initializeAIClient();
+
+      if (!this.lmstudioClient) {
+        console.error("LM Studio client not initialized");
         mainWindow.webContents.send(
           this.deps.PROCESSING_EVENTS.API_KEY_INVALID
         );
@@ -243,7 +256,7 @@ export class ProcessingHelper {
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.INITIAL_START)
       const screenshotQueue = this.screenshotHelper.getScreenshotQueue()
       console.log("Processing main queue screenshots:", screenshotQueue)
-      
+
       // Check if the queue is empty
       if (!screenshotQueue || screenshotQueue.length === 0) {
         console.log("No screenshots found in queue");
@@ -281,7 +294,7 @@ export class ProcessingHelper {
 
         // Filter out any nulls from failed screenshots
         const validScreenshots = screenshots.filter(Boolean);
-        
+
         if (validScreenshots.length === 0) {
           throw new Error("Failed to load screenshot data");
         }
@@ -341,12 +354,12 @@ export class ProcessingHelper {
       const extraScreenshotQueue =
         this.screenshotHelper.getExtraScreenshotQueue()
       console.log("Processing extra queue screenshots:", extraScreenshotQueue)
-      
+
       // Check if the extra queue is empty
       if (!extraScreenshotQueue || extraScreenshotQueue.length === 0) {
         console.log("No extra screenshots found in queue");
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        
+
         return;
       }
 
@@ -357,7 +370,7 @@ export class ProcessingHelper {
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
         return;
       }
-      
+
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.DEBUG_START)
 
       // Initialize AbortController
@@ -370,7 +383,7 @@ export class ProcessingHelper {
           ...this.screenshotHelper.getScreenshotQueue(),
           ...existingExtraScreenshots
         ];
-        
+
         const screenshots = await Promise.all(
           allPaths.map(async (path) => {
             try {
@@ -378,7 +391,7 @@ export class ProcessingHelper {
                 console.warn(`Screenshot file does not exist: ${path}`);
                 return null;
               }
-              
+
               return {
                 path,
                 preview: await this.screenshotHelper.getImagePreview(path),
@@ -390,14 +403,14 @@ export class ProcessingHelper {
             }
           })
         )
-        
+
         // Filter out any nulls from failed screenshots
         const validScreenshots = screenshots.filter(Boolean);
-        
+
         if (validScreenshots.length === 0) {
           throw new Error("Failed to load screenshot data for debugging");
         }
-        
+
         console.log(
           "Combined screenshots for processing:",
           validScreenshots.map((s) => s.path)
@@ -446,10 +459,10 @@ export class ProcessingHelper {
       const config = configHelper.loadConfig();
       const language = await this.getLanguage();
       const mainWindow = this.deps.getMainWindow();
-      
+
       // Step 1: Extract problem info using AI Vision API (OpenAI or Gemini)
       const imageDataList = screenshots.map(screenshot => screenshot.data);
-      
+
       // Update the user on progress
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
@@ -459,12 +472,12 @@ export class ProcessingHelper {
       }
 
       let problemInfo;
-      
+
       if (config.apiProvider === "openai") {
         // Verify OpenAI client
         if (!this.openaiClient) {
           this.initializeAIClient(); // Try to reinitialize
-          
+
           if (!this.openaiClient) {
             return {
               success: false,
@@ -476,14 +489,14 @@ export class ProcessingHelper {
         // Use OpenAI for processing
         const messages = [
           {
-            role: "system" as const, 
+            role: "system" as const,
             content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
           },
           {
             role: "user" as const,
             content: [
               {
-                type: "text" as const, 
+                type: "text" as const,
                 text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
               },
               ...imageDataList.map(data => ({
@@ -515,7 +528,7 @@ export class ProcessingHelper {
             error: "Failed to parse problem information. Please try again or use clearer screenshots."
           };
         }
-      } else if (config.apiProvider === "gemini")  {
+      } else if (config.apiProvider === "gemini") {
         // Use Gemini API
         if (!this.geminiApiKey) {
           return {
@@ -557,13 +570,13 @@ export class ProcessingHelper {
           );
 
           const responseData = response.data as GeminiResponse;
-          
+
           if (!responseData.candidates || responseData.candidates.length === 0) {
             throw new Error("Empty response from Gemini API");
           }
-          
+
           const responseText = responseData.candidates[0].content.parts[0].text;
-          
+
           // Handle when Gemini might wrap the JSON in markdown code blocks
           const jsonText = responseText.replace(/```json|```/g, '').trim();
           problemInfo = JSON.parse(jsonText);
@@ -634,8 +647,69 @@ export class ProcessingHelper {
             error: "Failed to process with Anthropic API. Please check your API key or try again later."
           };
         }
+      } else if (config.apiProvider === "lmstudio") {
+        // LM Studio processing using OpenAI-compatible API
+        if (!this.lmstudioClient) {
+          return {
+            success: false,
+            error: "LM Studio not connected. Make sure LM Studio is running and try again."
+          };
+        }
+
+        try {
+          const modelName = config.lmstudioModel || "qwen3-vl-8b";
+
+          // Build messages with vision content for LM Studio
+          const messages = [
+            {
+              role: "system" as const,
+              content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
+            },
+            {
+              role: "user" as const,
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
+                },
+                ...imageDataList.map(data => ({
+                  type: "image_url" as const,
+                  image_url: { url: `data:image/png;base64,${data}` }
+                }))
+              ]
+            }
+          ];
+
+          const response = await this.lmstudioClient.chat.completions.create({
+            model: modelName,
+            messages: messages,
+            max_tokens: 4000,
+            temperature: 0.2
+          });
+
+          const responseText = response.choices[0].message.content;
+          // Handle when model might wrap the JSON in markdown code blocks
+          const jsonText = responseText.replace(/```json|```/g, '').trim();
+          problemInfo = JSON.parse(jsonText);
+
+          console.log("LM Studio extraction successful:", problemInfo);
+        } catch (error: any) {
+          console.error("Error using LM Studio:", error);
+
+          if (error.code === 'ECONNREFUSED') {
+            return {
+              success: false,
+              error: "Cannot connect to LM Studio. Make sure the server is running on the correct port."
+            };
+          }
+
+          return {
+            success: false,
+            error: `LM Studio error: ${error.message || "Failed to process with local model"}`
+          };
+        }
       }
-      
+
       // Update the user on progress
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
@@ -659,13 +733,13 @@ export class ProcessingHelper {
         if (solutionsResult.success) {
           // Clear any existing extra screenshots before transitioning to solutions view
           this.screenshotHelper.clearExtraScreenshotQueue();
-          
+
           // Final progress update
           mainWindow.webContents.send("processing-status", {
             message: "Solution generated successfully",
             progress: 100
           });
-          
+
           mainWindow.webContents.send(
             this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
             solutionsResult.data
@@ -687,7 +761,7 @@ export class ProcessingHelper {
           error: "Processing was canceled by the user."
         };
       }
-      
+
       // Handle OpenAI API errors specifically
       if (error?.response?.status === 401) {
         return {
@@ -707,9 +781,9 @@ export class ProcessingHelper {
       }
 
       console.error("API Error Details:", error);
-      return { 
-        success: false, 
-        error: error.message || "Failed to process screenshots. Please try again." 
+      return {
+        success: false,
+        error: error.message || "Failed to process screenshots. Please try again."
       };
     }
   }
@@ -763,7 +837,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
 `;
 
       let responseContent;
-      
+
       if (config.apiProvider === "openai") {
         // OpenAI processing
         if (!this.openaiClient) {
@@ -772,7 +846,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: "OpenAI API key not configured. Please check your settings."
           };
         }
-        
+
         // Send to OpenAI API
         const solutionResponse = await this.openaiClient.chat.completions.create({
           model: config.solutionModel || "gpt-4o",
@@ -785,7 +859,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         });
 
         responseContent = solutionResponse.choices[0].message.content;
-      } else if (config.apiProvider === "gemini")  {
+      } else if (config.apiProvider === "gemini") {
         // Gemini processing
         if (!this.geminiApiKey) {
           return {
@@ -793,7 +867,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: "Gemini API key not configured. Please check your settings."
           };
         }
-        
+
         try {
           // Create Gemini message structure
           const geminiMessages = [
@@ -821,11 +895,11 @@ Your solution should be efficient, well-commented, and handle edge cases.
           );
 
           const responseData = response.data as GeminiResponse;
-          
+
           if (!responseData.candidates || responseData.candidates.length === 0) {
             throw new Error("Empty response from Gemini API");
           }
-          
+
           responseContent = responseData.candidates[0].content.parts[0].text;
         } catch (error) {
           console.error("Error using Gemini API for solution:", error);
@@ -842,7 +916,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: "Anthropic API key not configured. Please check your settings."
           };
         }
-        
+
         try {
           const messages = [
             {
@@ -886,22 +960,61 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: "Failed to generate solution with Anthropic API. Please check your API key or try again later."
           };
         }
+      } else if (config.apiProvider === "lmstudio") {
+        // LM Studio processing
+        if (!this.lmstudioClient) {
+          return {
+            success: false,
+            error: "LM Studio not connected. Make sure LM Studio is running and try again."
+          };
+        }
+
+        try {
+          const modelName = config.lmstudioModel || "qwen3-vl-8b";
+
+          const response = await this.lmstudioClient.chat.completions.create({
+            model: modelName,
+            messages: [
+              { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
+              { role: "user", content: promptText }
+            ],
+            max_tokens: 4000,
+            temperature: 0.2
+          });
+
+          responseContent = response.choices[0].message.content;
+          console.log("LM Studio solution generation successful");
+        } catch (error: any) {
+          console.error("Error using LM Studio for solution:", error);
+
+          if (error.code === 'ECONNREFUSED') {
+            return {
+              success: false,
+              error: "Cannot connect to LM Studio. Make sure the server is running."
+            };
+          }
+
+          return {
+            success: false,
+            error: `LM Studio error: ${error.message || "Failed to generate solution with local model"}`
+          };
+        }
       }
-      
+
       // Extract parts from the response
       const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
       const code = codeMatch ? codeMatch[1].trim() : responseContent;
-      
+
       // Extract thoughts, looking for bullet points or numbered lists
       const thoughtsRegex = /(?:Thoughts:|Key Insights:|Reasoning:|Approach:)([\s\S]*?)(?:Time complexity:|$)/i;
       const thoughtsMatch = responseContent.match(thoughtsRegex);
       let thoughts: string[] = [];
-      
+
       if (thoughtsMatch && thoughtsMatch[1]) {
         // Extract bullet points or numbered items
         const bulletPoints = thoughtsMatch[1].match(/(?:^|\n)\s*(?:[-*•]|\d+\.)\s*(.*)/g);
         if (bulletPoints) {
-          thoughts = bulletPoints.map(point => 
+          thoughts = bulletPoints.map(point =>
             point.replace(/^\s*(?:[-*•]|\d+\.)\s*/, '').trim()
           ).filter(Boolean);
         } else {
@@ -911,14 +1024,14 @@ Your solution should be efficient, well-commented, and handle edge cases.
             .filter(Boolean);
         }
       }
-      
+
       // Extract complexity information
       const timeComplexityPattern = /Time complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:Space complexity|$))/i;
       const spaceComplexityPattern = /Space complexity:?\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\s*(?:[A-Z]|$))/i;
-      
+
       let timeComplexity = "O(n) - Linear time complexity because we only iterate through the array once. Each element is processed exactly one time, and the hashmap lookups are O(1) operations.";
       let spaceComplexity = "O(n) - Linear space complexity because we store elements in the hashmap. In the worst case, we might need to store all elements before finding the solution pair.";
-      
+
       const timeMatch = responseContent.match(timeComplexityPattern);
       if (timeMatch && timeMatch[1]) {
         timeComplexity = timeMatch[1].trim();
@@ -933,7 +1046,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
           }
         }
       }
-      
+
       const spaceMatch = responseContent.match(spaceComplexityPattern);
       if (spaceMatch && spaceMatch[1]) {
         spaceComplexity = spaceMatch[1].trim();
@@ -964,7 +1077,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
           error: "Processing was canceled by the user."
         };
       }
-      
+
       if (error?.response?.status === 401) {
         return {
           success: false,
@@ -976,7 +1089,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
           error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
         };
       }
-      
+
       console.error("Solution generation error:", error);
       return { success: false, error: error.message || "Failed to generate solution" };
     }
@@ -1006,9 +1119,9 @@ Your solution should be efficient, well-commented, and handle edge cases.
 
       // Prepare the images for the API call
       const imageDataList = screenshots.map(screenshot => screenshot.data);
-      
+
       let debugContent;
-      
+
       if (config.apiProvider === "openai") {
         if (!this.openaiClient) {
           return {
@@ -1016,10 +1129,10 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: "OpenAI API key not configured. Please check your settings."
           };
         }
-        
+
         const messages = [
           {
-            role: "system" as const, 
+            role: "system" as const,
             content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
 
 Your response MUST follow this exact structure with these section headers (use ### for headers):
@@ -1044,12 +1157,12 @@ If you include code examples, use proper markdown code blocks with language spec
             role: "user" as const,
             content: [
               {
-                type: "text" as const, 
+                type: "text" as const,
                 text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${language}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with:
 1. What issues you found in my code
 2. Specific improvements and corrections
 3. Any optimizations that would make the solution better
-4. A clear explanation of the changes needed` 
+4. A clear explanation of the changes needed`
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -1072,16 +1185,16 @@ If you include code examples, use proper markdown code blocks with language spec
           max_tokens: 4000,
           temperature: 0.2
         });
-        
+
         debugContent = debugResponse.choices[0].message.content;
-      } else if (config.apiProvider === "gemini")  {
+      } else if (config.apiProvider === "gemini") {
         if (!this.geminiApiKey) {
           return {
             success: false,
             error: "Gemini API key not configured. Please check your settings."
           };
         }
-        
+
         try {
           const debugPrompt = `
 You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
@@ -1142,11 +1255,11 @@ If you include code examples, use proper markdown code blocks with language spec
           );
 
           const responseData = response.data as GeminiResponse;
-          
+
           if (!responseData.candidates || responseData.candidates.length === 0) {
             throw new Error("Empty response from Gemini API");
           }
-          
+
           debugContent = responseData.candidates[0].content.parts[0].text;
         } catch (error) {
           console.error("Error using Gemini API for debugging:", error);
@@ -1162,7 +1275,7 @@ If you include code examples, use proper markdown code blocks with language spec
             error: "Anthropic API key not configured. Please check your settings."
           };
         }
-        
+
         try {
           const debugPrompt = `
 You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help.
@@ -1200,7 +1313,7 @@ If you include code examples, use proper markdown code blocks with language spec
                   type: "image" as const,
                   source: {
                     type: "base64" as const,
-                    media_type: "image/png" as const, 
+                    media_type: "image/png" as const,
                     data: data
                   }
                 }))
@@ -1221,11 +1334,11 @@ If you include code examples, use proper markdown code blocks with language spec
             messages: messages,
             temperature: 0.2
           });
-          
+
           debugContent = (response.content[0] as { type: 'text', text: string }).text;
         } catch (error: any) {
           console.error("Error using Anthropic API for debugging:", error);
-          
+
           // Add specific handling for Claude's limitations
           if (error.status === 429) {
             return {
@@ -1238,15 +1351,15 @@ If you include code examples, use proper markdown code blocks with language spec
               error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
             };
           }
-          
+
           return {
             success: false,
             error: "Failed to process debug request with Anthropic API. Please check your API key or try again later."
           };
         }
       }
-      
-      
+
+
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
           message: "Debug analysis complete",
@@ -1261,7 +1374,7 @@ If you include code examples, use proper markdown code blocks with language spec
       }
 
       let formattedDebugContent = debugContent;
-      
+
       if (!debugContent.includes('# ') && !debugContent.includes('## ')) {
         formattedDebugContent = debugContent
           .replace(/issues identified|problems found|bugs found/i, '## Issues Identified')
@@ -1271,10 +1384,10 @@ If you include code examples, use proper markdown code blocks with language spec
       }
 
       const bulletPoints = formattedDebugContent.match(/(?:^|\n)[ ]*(?:[-*•]|\d+\.)[ ]+([^\n]+)/g);
-      const thoughts = bulletPoints 
+      const thoughts = bulletPoints
         ? bulletPoints.map(point => point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5)
         : ["Debug analysis based on your screenshots"];
-      
+
       const response = {
         code: extractedCode,
         debug_analysis: formattedDebugContent,

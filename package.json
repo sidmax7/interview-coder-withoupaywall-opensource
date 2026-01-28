@@ -15,8 +15,8 @@
     "package-win": "npm run build && electron-builder build --win"
   },
   "build": {
-    "appId": "com.chunginlee.interviewcoder",
-    "productName": "Interview Coder",
+    "appId": "com.gog.launcher",
+    "productName": "GOG launcher",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
