@@ -6,28 +6,47 @@ import { EventEmitter } from "events"
 
 interface Config {
   apiKey: string;
-  apiProvider: "gemini" | "lmstudio";  // Only Gemini and LM Studio supported
+  apiProvider: "gemini" | "lmstudio";  // Kept for backward compat / master switch
+
+  // Granular providers
+  extractionProvider: "gemini" | "lmstudio";
+  solutionProvider: "gemini" | "lmstudio";
+  debuggingProvider: "gemini" | "lmstudio";
+
+  // Model selections per step
   extractionModel: string;
   solutionModel: string;
   debuggingModel: string;
+
+  systemPrompt: string; // New system prompt
+
   language: string;
   opacity: number;
-  lmstudioEndpoint: string;  // LM Studio server endpoint
-  lmstudioModel: string;     // Model name in LM Studio
+  lmstudioEndpoint: string;
+  lmstudioModel: string;
 }
 
 export class ConfigHelper extends EventEmitter {
   private configPath: string;
   private defaultConfig: Config = {
     apiKey: "",
-    apiProvider: "gemini", // Default to Gemini
-    extractionModel: "gemini-2.0-flash", // Default to Flash for faster responses
+    apiProvider: "gemini",
+
+    // Default all steps to Gemini initially
+    extractionProvider: "gemini",
+    solutionProvider: "gemini",
+    debuggingProvider: "gemini",
+
+    extractionModel: "gemini-2.0-flash",
     solutionModel: "gemini-2.0-flash",
     debuggingModel: "gemini-2.0-flash",
+
+    systemPrompt: "", // Default empty
+
     language: "python",
     opacity: 1.0,
-    lmstudioEndpoint: "http://localhost:1234/v1",  // Default LM Studio endpoint
-    lmstudioModel: "qwen3-vl-8b"  // Default model for LM Studio
+    lmstudioEndpoint: "http://localhost:1234/v1",
+    lmstudioModel: "qwen3-vl-8b"
   };
 
   constructor() {
@@ -89,27 +108,33 @@ export class ConfigHelper extends EventEmitter {
     try {
       if (fs.existsSync(this.configPath)) {
         const configData = fs.readFileSync(this.configPath, 'utf8');
-        const config = JSON.parse(configData);
+        const loadedConfig = JSON.parse(configData);
 
-        // Ensure apiProvider is a valid value (only gemini or lmstudio supported)
-        if (config.apiProvider !== "gemini" && config.apiProvider !== "lmstudio") {
-          config.apiProvider = "gemini"; // Default to Gemini if invalid
+        // Migration: If new fields are missing, populate them based on old apiProvider
+        if (!loadedConfig.extractionProvider) {
+          loadedConfig.extractionProvider = loadedConfig.apiProvider || "gemini";
+        }
+        if (!loadedConfig.solutionProvider) {
+          loadedConfig.solutionProvider = loadedConfig.apiProvider || "gemini";
+        }
+        if (!loadedConfig.debuggingProvider) {
+          loadedConfig.debuggingProvider = loadedConfig.apiProvider || "gemini";
         }
 
-        // Sanitize model selections to ensure only allowed models are used
-        if (config.extractionModel) {
-          config.extractionModel = this.sanitizeModelSelection(config.extractionModel, config.apiProvider);
+        // Sanitize model selections based on their specific providers
+        if (loadedConfig.extractionModel) {
+          loadedConfig.extractionModel = this.sanitizeModelSelection(loadedConfig.extractionModel, loadedConfig.extractionProvider);
         }
-        if (config.solutionModel) {
-          config.solutionModel = this.sanitizeModelSelection(config.solutionModel, config.apiProvider);
+        if (loadedConfig.solutionModel) {
+          loadedConfig.solutionModel = this.sanitizeModelSelection(loadedConfig.solutionModel, loadedConfig.solutionProvider);
         }
-        if (config.debuggingModel) {
-          config.debuggingModel = this.sanitizeModelSelection(config.debuggingModel, config.apiProvider);
+        if (loadedConfig.debuggingModel) {
+          loadedConfig.debuggingModel = this.sanitizeModelSelection(loadedConfig.debuggingModel, loadedConfig.debuggingProvider);
         }
 
         return {
           ...this.defaultConfig,
-          ...config
+          ...loadedConfig
         };
       }
 
@@ -145,45 +170,52 @@ export class ConfigHelper extends EventEmitter {
   public updateConfig(updates: Partial<Config>): Config {
     try {
       const currentConfig = this.loadConfig();
-      let provider = updates.apiProvider || currentConfig.apiProvider;
 
-      // If provider is changing, reset models to the default for that provider
+      // If global apiProvider is updated, sync granular providers to it (convenience)
       if (updates.apiProvider && updates.apiProvider !== currentConfig.apiProvider) {
-        if (updates.apiProvider === "lmstudio") {
-          // LM Studio uses a single model for all tasks
-          const lmModel = currentConfig.lmstudioModel || "qwen3-vl-8b";
-          updates.extractionModel = lmModel;
-          updates.solutionModel = lmModel;
-          updates.debuggingModel = lmModel;
-        } else {
-          // Gemini (default)
-          updates.extractionModel = "gemini-2.0-flash";
-          updates.solutionModel = "gemini-2.0-flash";
-          updates.debuggingModel = "gemini-2.0-flash";
-        }
+        if (!updates.extractionProvider) updates.extractionProvider = updates.apiProvider;
+        if (!updates.solutionProvider) updates.solutionProvider = updates.apiProvider;
+        if (!updates.debuggingProvider) updates.debuggingProvider = updates.apiProvider;
       }
 
-      // Sanitize model selections in the updates
+      // Helper to handle provider-specific model resets
+      const handleProviderChange = (step: 'extraction' | 'solution' | 'debugging', newProvider: string) => {
+        const modelKey = `${step}Model` as keyof Config;
+        const oldProvider = currentConfig[`${step}Provider` as keyof Config];
+
+        if (newProvider !== oldProvider) {
+          if (newProvider === "lmstudio") {
+            // If switching to LM Studio, use the generic LM model
+            (updates as any)[modelKey] = currentConfig.lmstudioModel || "qwen3-vl-8b";
+          } else {
+            // If switching to Gemini, reset to default Gemini model
+            (updates as any)[modelKey] = "gemini-2.0-flash";
+          }
+        }
+      };
+
+      if (updates.extractionProvider) handleProviderChange('extraction', updates.extractionProvider);
+      if (updates.solutionProvider) handleProviderChange('solution', updates.solutionProvider);
+      if (updates.debuggingProvider) handleProviderChange('debugging', updates.debuggingProvider);
+
+      // Sanitize model selections
+      const mergedConfig = { ...currentConfig, ...updates };
+
       if (updates.extractionModel) {
-        updates.extractionModel = this.sanitizeModelSelection(updates.extractionModel, provider);
+        updates.extractionModel = this.sanitizeModelSelection(updates.extractionModel, mergedConfig.extractionProvider);
       }
       if (updates.solutionModel) {
-        updates.solutionModel = this.sanitizeModelSelection(updates.solutionModel, provider);
+        updates.solutionModel = this.sanitizeModelSelection(updates.solutionModel, mergedConfig.solutionProvider);
       }
       if (updates.debuggingModel) {
-        updates.debuggingModel = this.sanitizeModelSelection(updates.debuggingModel, provider);
+        updates.debuggingModel = this.sanitizeModelSelection(updates.debuggingModel, mergedConfig.debuggingProvider);
       }
 
       const newConfig = { ...currentConfig, ...updates };
       this.saveConfig(newConfig);
 
-      // Only emit update event for changes other than opacity
-      // This prevents re-initializing the AI client when only opacity changes
-      if (updates.apiKey !== undefined || updates.apiProvider !== undefined ||
-        updates.extractionModel !== undefined || updates.solutionModel !== undefined ||
-        updates.debuggingModel !== undefined || updates.language !== undefined) {
-        this.emit('config-updated', newConfig);
-      }
+      // Emit update event
+      this.emit('config-updated', newConfig);
 
       return newConfig;
     } catch (error) {
@@ -197,11 +229,19 @@ export class ConfigHelper extends EventEmitter {
    */
   public hasApiKey(): boolean {
     const config = this.loadConfig();
-    // LM Studio doesn't require an API key
-    if (config.apiProvider === "lmstudio") {
-      return true;
+
+    // Check if ANY of the active providers are Gemini
+    const usesGemini = config.extractionProvider === "gemini" ||
+      config.solutionProvider === "gemini" ||
+      config.debuggingProvider === "gemini";
+
+    // If we use Gemini anywhere, we need an API key
+    if (usesGemini) {
+      return !!config.apiKey && config.apiKey.trim().length > 0;
     }
-    return !!config.apiKey && config.apiKey.trim().length > 0;
+
+    // If we only use LM Studio, we don't need a key
+    return true;
   }
 
   /**

@@ -64,7 +64,18 @@ export class ProcessingHelper {
       this.geminiApiKey = null;
       this.lmstudioClient = null;
 
-      if (config.apiProvider === "gemini") {
+      // Check which providers are needed
+      const usesGemini = config.extractionProvider === "gemini" ||
+        config.solutionProvider === "gemini" ||
+        config.debuggingProvider === "gemini" ||
+        config.apiProvider === "gemini"; // Backward compat
+
+      const usesLMStudio = config.extractionProvider === "lmstudio" ||
+        config.solutionProvider === "lmstudio" ||
+        config.debuggingProvider === "lmstudio" ||
+        config.apiProvider === "lmstudio"; // Backward compat
+
+      if (usesGemini) {
         // Gemini client initialization
         if (config.apiKey) {
           this.geminiApiKey = config.apiKey;
@@ -72,7 +83,9 @@ export class ProcessingHelper {
         } else {
           console.warn("No API key available, Gemini client not initialized");
         }
-      } else if (config.apiProvider === "lmstudio") {
+      }
+
+      if (usesLMStudio) {
         // LM Studio uses OpenAI-compatible API
         const endpoint = config.lmstudioEndpoint || "http://localhost:1234/v1";
         this.lmstudioClient = new OpenAI({
@@ -164,24 +177,19 @@ export class ProcessingHelper {
     const config = configHelper.loadConfig();
 
     // First verify we have a valid AI client
-    if (config.apiProvider === "gemini" && !this.geminiApiKey) {
+    // First verify we have a valid AI client based on the needed provider
+    if (config.extractionProvider === "gemini" && !this.geminiApiKey) {
       this.initializeAIClient();
-
       if (!this.geminiApiKey) {
-        console.error("Gemini API key not initialized");
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-        );
+        console.error("Gemini API key not initialized for extraction");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
         return;
       }
-    } else if (config.apiProvider === "lmstudio" && !this.lmstudioClient) {
+    } else if (config.extractionProvider === "lmstudio" && !this.lmstudioClient) {
       this.initializeAIClient();
-
       if (!this.lmstudioClient) {
-        console.error("LM Studio client not initialized");
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-        );
+        console.error("LM Studio client not initialized for extraction");
+        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.API_KEY_INVALID);
         return;
       }
     }
@@ -410,7 +418,7 @@ export class ProcessingHelper {
 
       let problemInfo;
 
-      if (config.apiProvider === "gemini") {
+      if (config.extractionProvider === "gemini") {
         // Use Gemini API
         if (!this.geminiApiKey) {
           return {
@@ -470,7 +478,7 @@ export class ProcessingHelper {
             error: `Gemini API Error: ${errorMessage}`
           };
         }
-      } else if (config.apiProvider === "lmstudio") {
+      } else if (config.extractionProvider === "lmstudio") {
         // LM Studio processing using OpenAI-compatible API
         if (!this.lmstudioClient) {
           return {
@@ -480,7 +488,7 @@ export class ProcessingHelper {
         }
 
         try {
-          const modelName = config.lmstudioModel || "qwen3-vl-8b";
+          const modelName = config.extractionModel || config.lmstudioModel || "qwen3-vl-8b";
 
           // Build messages with vision content for LM Studio
           const messages = [
@@ -631,6 +639,13 @@ export class ProcessingHelper {
       }
 
       // Create prompt for solution generation
+      const systemPrompt = config.systemPrompt || "";
+      const baseSystemInstruction = "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations.";
+
+      const fullSystemInstruction = systemPrompt
+        ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
+        : baseSystemInstruction;
+
       const promptText = `
 Generate a detailed solution for the following coding problem:
 
@@ -648,20 +663,20 @@ ${problemInfo.example_output || "No example output provided."}
 
 LANGUAGE: ${language}
 
-I need the response in the following format:
-1. Code: A clean, optimized implementation in ${language}
-2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-4. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
-
-For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
+IMPORTANT INSTRUCTIONS:
+1. If the input is NOT a coding problem (e.g., general question, simple chat), IGNORE strict formatting and answer in plain text.
+2. If it IS a coding problem, you MUST follow this format:
+   1. Code: A clean, optimized implementation in ${language}
+   2. Your Thoughts: A list of key insights and reasoning behind your approach
+   3. Time complexity: O(X) with a detailed explanation
+   4. Space complexity: O(X) with a detailed explanation
 
 Your solution should be efficient, well-commented, and handle edge cases.
 `;
 
       let responseContent;
 
-      if (config.apiProvider === "gemini") {
+      if (config.solutionProvider === "gemini") {
         // Gemini processing
         if (!this.geminiApiKey) {
           return {
@@ -677,7 +692,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
               role: "user",
               parts: [
                 {
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+                  text: `${fullSystemInstruction}\n\n${promptText}`
                 }
               ]
             }
@@ -711,7 +726,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: `Gemini API Error: ${errorMessage}`
           };
         }
-      } else if (config.apiProvider === "lmstudio") {
+      } else if (config.solutionProvider === "lmstudio") {
         // LM Studio processing
         if (!this.lmstudioClient) {
           return {
@@ -721,12 +736,12 @@ Your solution should be efficient, well-commented, and handle edge cases.
         }
 
         try {
-          const modelName = config.lmstudioModel || "qwen3-vl-8b";
+          const modelName = config.solutionModel || config.lmstudioModel || "qwen3-vl-8b";
 
           const response = await this.lmstudioClient.chat.completions.create({
             model: modelName,
             messages: [
-              { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
+              { role: "system", content: fullSystemInstruction },
               { role: "user", content: promptText }
             ],
             max_tokens: 4000,
@@ -750,6 +765,22 @@ Your solution should be efficient, well-commented, and handle edge cases.
             error: `LM Studio error: ${error.message || "Failed to generate solution with local model"}`
           };
         }
+      }
+
+      // Check if response is plain text (non-technical)
+      // If it doesn't contain "Code:" or code blocks or "Time complexity:", treat as plain text
+      const isTechnical = /Code:|```|Time complexity:/i.test(responseContent || "");
+
+      if (!isTechnical && responseContent) {
+        return {
+          success: true,
+          data: {
+            code: responseContent, // Use the plain text as the "code" to display
+            thoughts: ["Non-technical question detected.", "Answer provided in plain text."],
+            timeComplexity: "N/A",
+            spaceComplexity: "N/A"
+          }
+        };
       }
 
       // Extract parts from the response

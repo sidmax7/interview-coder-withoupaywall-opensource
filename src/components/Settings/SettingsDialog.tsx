@@ -137,14 +137,22 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDialogProps) {
   const [open, setOpen] = useState(externalOpen || false);
   const [apiKey, setApiKey] = useState("");
-  const [apiProvider, setApiProvider] = useState<APIProvider>("gemini");
+
+  // Granular settings
+  const [extractionProvider, setExtractionProvider] = useState<APIProvider>("gemini");
+  const [solutionProvider, setSolutionProvider] = useState<APIProvider>("gemini");
+  const [debuggingProvider, setDebuggingProvider] = useState<APIProvider>("gemini");
+
   const [extractionModel, setExtractionModel] = useState("gemini-2.5-flash");
   const [solutionModel, setSolutionModel] = useState("gemini-2.5-flash");
   const [debuggingModel, setDebuggingModel] = useState("gemini-2.5-flash");
+
+  const [systemPrompt, setSystemPrompt] = useState("");
+
   const [isLoading, setIsLoading] = useState(false);
   const [lmstudioEndpoint, setLmstudioEndpoint] = useState("http://localhost:1234/v1");
   const [lmstudioModel, setLmstudioModel] = useState("qwen3-vl-8b");
-  const [connectionStatus, setConnectionStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+
   const { showToast } = useToast();
 
   // Sync with external open state
@@ -157,7 +165,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   // Handle open state changes
   const handleOpenChange = (newOpen: boolean) => {
     setOpen(newOpen);
-    // Only call onOpenChange when there's actually a change
     if (onOpenChange && newOpen !== externalOpen) {
       onOpenChange(newOpen);
     }
@@ -167,24 +174,24 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   useEffect(() => {
     if (open) {
       setIsLoading(true);
-      interface Config {
-        apiKey?: string;
-        apiProvider?: APIProvider;
-        extractionModel?: string;
-        solutionModel?: string;
-        debuggingModel?: string;
-        lmstudioEndpoint?: string;
-        lmstudioModel?: string;
-      }
 
       window.electronAPI
         .getConfig()
-        .then((config: Config) => {
+        .then((config: any) => {
           setApiKey(config.apiKey || "");
-          setApiProvider(config.apiProvider || "gemini");
+
+          // Load granular providers (fallback to global apiProvider if missing)
+          const fallbackProvider = config.apiProvider || "gemini";
+          setExtractionProvider(config.extractionProvider || fallbackProvider);
+          setSolutionProvider(config.solutionProvider || fallbackProvider);
+          setDebuggingProvider(config.debuggingProvider || fallbackProvider);
+
           setExtractionModel(config.extractionModel || "gemini-2.5-flash");
           setSolutionModel(config.solutionModel || "gemini-2.5-flash");
           setDebuggingModel(config.debuggingModel || "gemini-2.5-flash");
+
+          setSystemPrompt(config.systemPrompt || "");
+
           setLmstudioEndpoint(config.lmstudioEndpoint || "http://localhost:1234/v1");
           setLmstudioModel(config.lmstudioModel || "qwen3-vl-8b");
         })
@@ -198,51 +205,37 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     }
   }, [open, showToast]);
 
-  // Handle API provider change
-  const handleProviderChange = (provider: APIProvider) => {
-    setApiProvider(provider);
-
-    // Reset models to defaults when changing provider
-    if (provider === "gemini") {
-      setExtractionModel("gemini-2.5-flash");
-      setSolutionModel("gemini-2.5-flash");
-      setDebuggingModel("gemini-2.5-flash");
-    } else if (provider === "lmstudio") {
-      // LM Studio uses a single model for all tasks
-      setExtractionModel(lmstudioModel);
-      setSolutionModel(lmstudioModel);
-      setDebuggingModel(lmstudioModel);
-      setConnectionStatus("idle");
-    }
-  };
-
   const handleSave = async () => {
     setIsLoading(true);
     try {
       const configUpdate: Record<string, any> = {
-        apiProvider,
+        extractionProvider,
+        solutionProvider,
+        debuggingProvider,
         extractionModel,
         solutionModel,
         debuggingModel,
+        systemPrompt,
+        lmstudioEndpoint,
+        lmstudioModel
       };
 
-      // Only include API key for non-LM Studio providers
-      if (apiProvider !== "lmstudio") {
+      // Check if ANY provider is Gemini to decide if we need the API key
+      const usesGemini = extractionProvider === "gemini" || solutionProvider === "gemini" || debuggingProvider === "gemini";
+
+      if (usesGemini) {
         configUpdate.apiKey = apiKey;
-      } else {
-        // Include LM Studio-specific config
-        configUpdate.lmstudioEndpoint = lmstudioEndpoint;
-        configUpdate.lmstudioModel = lmstudioModel;
-        configUpdate.apiKey = ""; // Clear API key for LM Studio
       }
+
+      // Update global apiProvider based on extraction for backward compatibility/simplicity
+      configUpdate.apiProvider = extractionProvider;
 
       const result = await window.electronAPI.updateConfig(configUpdate);
 
       if (result) {
         showToast("Success", "Settings saved successfully", "success");
         handleOpenChange(false);
-
-        // Force reload the app to apply the API key
+        // Force reload to apply changes
         setTimeout(() => {
           window.location.reload();
         }, 1500);
@@ -255,13 +248,11 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     }
   };
 
-  // Mask API key for display
   const maskApiKey = (key: string) => {
     if (!key || key.length < 10) return "";
     return `${key.substring(0, 4)}...${key.substring(key.length - 4)}`;
   };
 
-  // Open external link handler
   const openExternalLink = (url: string) => {
     window.electronAPI.openLink(url);
   };
@@ -275,260 +266,180 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           top: '50%',
           left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: 'min(450px, 90vw)',
+          width: 'min(550px, 95vw)',
           height: 'auto',
-          minHeight: '400px',
+          minHeight: '500px',
           maxHeight: '90vh',
           overflowY: 'auto',
           zIndex: 9999,
           margin: 0,
           padding: '20px',
-          transition: 'opacity 0.25s ease, transform 0.25s ease',
-          animation: 'fadeIn 0.25s ease forwards',
-          opacity: 0.98
         }}
       >
         <DialogHeader>
-          <DialogTitle>API Settings</DialogTitle>
+          <DialogTitle>Settings</DialogTitle>
           <DialogDescription className="text-white/70">
-            Configure your API key and model preferences. You'll need your own API key to use this application.
+            Configure AI providers, models, and system prompts.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          {/* API Provider Selection */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-white">API Provider</label>
-            <div className="flex gap-2">
-              <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${apiProvider === "gemini"
-                  ? "bg-white/10 border border-white/20"
-                  : "bg-black/30 border border-white/5 hover:bg-white/5"
-                  }`}
-                onClick={() => handleProviderChange("gemini")}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded-full ${apiProvider === "gemini" ? "bg-white" : "bg-white/20"
-                      }`}
-                  />
-                  <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">Gemini</p>
-                    <p className="text-xs text-white/60">Gemini 1.5 models</p>
-                  </div>
-                </div>
-              </div>
-              <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${apiProvider === "lmstudio"
-                  ? "bg-white/10 border border-white/20"
-                  : "bg-black/30 border border-white/5 hover:bg-white/5"
-                  }`}
-                onClick={() => handleProviderChange("lmstudio")}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded-full ${apiProvider === "lmstudio" ? "bg-white" : "bg-white/20"
-                      }`}
-                  />
-                  <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">LM Studio</p>
-                    <p className="text-xs text-white/60">Local models</p>
-                  </div>
-                </div>
-              </div>
+
+        <div className="space-y-6 py-4">
+
+          {/* General Gemini Configuration */}
+          <div className="space-y-3 pb-4 border-b border-white/10">
+            <h3 className="text-sm font-medium text-white mb-2">Gemini Configuration</h3>
+            <div className="space-y-2">
+              <label className="text-xs text-white/70">API Key (Required for Gemini providers)</label>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Enter Gemini API Key"
+                className="bg-black/50 border-white/10 text-white"
+              />
+              {apiKey && <p className="text-[10px] text-white/40">{maskApiKey(apiKey)}</p>}
             </div>
+            <p className="text-[10px] text-white/50">
+              Get your key from <span className="text-blue-400 cursor-pointer hover:underline" onClick={() => openExternalLink('https://aistudio.google.com/app/apikey')}>Google AI Studio</span>.
+            </p>
           </div>
 
-          <div className="space-y-2">
-            {apiProvider === "lmstudio" ? (
-              // LM Studio endpoint configuration
-              <>
-                <label className="text-sm font-medium text-white" htmlFor="lmEndpoint">
-                  LM Studio Server URL
-                </label>
+          {/* LM Studio Configuration */}
+          <div className="space-y-3 pb-4 border-b border-white/10">
+            <h3 className="text-sm font-medium text-white mb-2">LM Studio Configuration</h3>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-white/70">Server URL</label>
                 <Input
-                  id="lmEndpoint"
-                  type="text"
                   value={lmstudioEndpoint}
                   onChange={(e) => setLmstudioEndpoint(e.target.value)}
                   placeholder="http://localhost:1234/v1"
-                  className="bg-black/50 border-white/10 text-white"
+                  className="bg-black/50 border-white/10 text-white text-xs"
                 />
-                <div className="mt-2">
-                  <label className="text-sm font-medium text-white" htmlFor="lmModel">
-                    Model Name
-                  </label>
-                  <Input
-                    id="lmModel"
-                    type="text"
-                    value={lmstudioModel}
-                    onChange={(e) => setLmstudioModel(e.target.value)}
-                    placeholder="qwen3-vl-8b"
-                    className="bg-black/50 border-white/10 text-white mt-1"
-                  />
-                </div>
-                <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
-                  <p className="text-xs text-white/80 mb-1">Setup Instructions:</p>
-                  <p className="text-xs text-white/60 mb-1">1. Download and install LM Studio</p>
-                  <p className="text-xs text-white/60 mb-1">2. Load a vision model (e.g., Qwen3-VL-8B)</p>
-                  <p className="text-xs text-white/60">3. Click "Start Server" in LM Studio (default port: 1234)</p>
-                </div>
-              </>
-            ) : (
-              // Cloud API key configuration (Gemini)
-              <>
-                <label className="text-sm font-medium text-white" htmlFor="apiKey">
-                  Gemini API Key
-                </label>
+              </div>
+              <div>
+                <label className="text-xs text-white/70">Model ID</label>
                 <Input
-                  id="apiKey"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Enter your Gemini API key"
-                  className="bg-black/50 border-white/10 text-white"
+                  value={lmstudioModel}
+                  onChange={(e) => setLmstudioModel(e.target.value)}
+                  placeholder="qwen3-vl-8b"
+                  className="bg-black/50 border-white/10 text-white text-xs"
                 />
-                {apiKey && (
-                  <p className="text-xs text-white/50">
-                    Current: {maskApiKey(apiKey)}
-                  </p>
-                )}
-                <p className="text-xs text-white/50">
-                  Your API key is stored locally and never sent to any server except Google
-                </p>
-                <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
-                  <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
-                  <p className="text-xs text-white/60 mb-1">1. Create an account at <button
-                    onClick={() => openExternalLink('https://aistudio.google.com/')}
-                    className="text-blue-400 hover:underline cursor-pointer">Google AI Studio</button>
-                  </p>
-                  <p className="text-xs text-white/60 mb-1">2. Go to the <button
-                    onClick={() => openExternalLink('https://aistudio.google.com/app/apikey')}
-                    className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                  </p>
-                  <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="space-y-2 mt-4">
-            <label className="text-sm font-medium text-white mb-2 block">Keyboard Shortcuts</label>
-            <div className="bg-black/30 border border-white/10 rounded-lg p-3">
-              <div className="grid grid-cols-2 gap-y-2 text-xs">
-                <div className="text-white/70">Toggle Visibility</div>
-                <div className="text-white/90 font-mono">Ctrl+B / Cmd+B</div>
-
-                <div className="text-white/70">Take Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+H / Cmd+H</div>
-
-                <div className="text-white/70">Process Screenshots</div>
-                <div className="text-white/90 font-mono">Ctrl+Enter / Cmd+Enter</div>
-
-                <div className="text-white/70">Delete Last Screenshot</div>
-                <div className="text-white/90 font-mono">Ctrl+L / Cmd+L</div>
-
-                <div className="text-white/70">Reset View</div>
-                <div className="text-white/90 font-mono">Ctrl+R / Cmd+R</div>
-
-                <div className="text-white/70">Quit Application</div>
-                <div className="text-white/90 font-mono">Ctrl+Q / Cmd+Q</div>
-
-                <div className="text-white/70">Move Window</div>
-                <div className="text-white/90 font-mono">Ctrl+Arrow Keys</div>
-
-                <div className="text-white/70">Decrease Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+[ / Cmd+[</div>
-
-                <div className="text-white/70">Increase Opacity</div>
-                <div className="text-white/90 font-mono">Ctrl+] / Cmd+]</div>
-
-                <div className="text-white/70">Zoom Out</div>
-                <div className="text-white/90 font-mono">Ctrl+- / Cmd+-</div>
-
-                <div className="text-white/70">Reset Zoom</div>
-                <div className="text-white/90 font-mono">Ctrl+0 / Cmd+0</div>
-
-                <div className="text-white/70">Zoom In</div>
-                <div className="text-white/90 font-mono">Ctrl+= / Cmd+=</div>
               </div>
             </div>
           </div>
 
-          {apiProvider !== "lmstudio" && (
-            <div className="space-y-4 mt-4">
-              <label className="text-sm font-medium text-white">AI Model Selection</label>
-              <p className="text-xs text-white/60 -mt-3 mb-2">
-                Select which models to use for each stage of the process
-              </p>
+          {/* System Prompt */}
+          <div className="space-y-2 pb-4 border-b border-white/10">
+            <label className="text-sm font-medium text-white">System Prompt</label>
+            <p className="text-xs text-white/60">Custom instructions for valid requests (e.g. "Answer in pirate speak")</p>
+            <textarea
+              className="w-full h-20 bg-black/50 border border-white/10 rounded-md p-2 text-xs text-white resize-none focus:outline-none focus:border-white/30"
+              placeholder="You are a helpful assistant..."
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+            />
+          </div>
 
-              {modelCategories.map((category) => {
-                // Get the Gemini model list (only cloud provider now)
-                const models = category.geminiModels;
+          {/* Workflow Configuration */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-white">Workflow Configuration</h3>
 
-                return (
-                  <div key={category.key} className="mb-4">
-                    <label className="text-sm font-medium text-white mb-1 block">
-                      {category.title}
-                    </label>
-                    <p className="text-xs text-white/60 mb-2">{category.description}</p>
+            {modelCategories.map((category) => {
+              let currentProvider: APIProvider;
+              let setProvider: (p: APIProvider) => void;
+              let currentValue: string;
+              let setValue: (v: string) => void;
 
-                    <div className="space-y-2">
-                      {models.map((m) => {
-                        // Determine which state to use based on category key
-                        const currentValue =
-                          category.key === 'extractionModel' ? extractionModel :
-                            category.key === 'solutionModel' ? solutionModel :
-                              debuggingModel;
+              if (category.key === 'extractionModel') {
+                currentProvider = extractionProvider;
+                setProvider = setExtractionProvider;
+                currentValue = extractionModel;
+                setValue = setExtractionModel;
+              } else if (category.key === 'solutionModel') {
+                currentProvider = solutionProvider;
+                setProvider = setSolutionProvider;
+                currentValue = solutionModel;
+                setValue = setSolutionModel;
+              } else {
+                currentProvider = debuggingProvider;
+                setProvider = setDebuggingProvider;
+                currentValue = debuggingModel;
+                setValue = setDebuggingModel;
+              }
 
-                        // Determine which setter function to use
-                        const setValue =
-                          category.key === 'extractionModel' ? setExtractionModel :
-                            category.key === 'solutionModel' ? setSolutionModel :
-                              setDebuggingModel;
-
-                        return (
-                          <div
-                            key={m.id}
-                            className={`p-2 rounded-lg cursor-pointer transition-colors ${currentValue === m.id
-                              ? "bg-white/10 border border-white/20"
-                              : "bg-black/30 border border-white/5 hover:bg-white/5"
-                              }`}
-                            onClick={() => setValue(m.id)}
-                          >
-                            <div className="flex items-center gap-2">
-                              <div
-                                className={`w-3 h-3 rounded-full ${currentValue === m.id ? "bg-white" : "bg-white/20"
-                                  }`}
-                              />
-                              <div>
-                                <p className="font-medium text-white text-xs">{m.name}</p>
-                                <p className="text-xs text-white/60">{m.description}</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+              return (
+                <div key={category.key} className="space-y-3 pb-4 last:pb-0">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-sm font-medium text-white">{category.title}</label>
+                      <p className="text-[10px] text-white/60">{category.description}</p>
+                    </div>
+                    {/* Provider Toggle */}
+                    <div className="flex bg-white/5 rounded-lg p-1 border border-white/10">
+                      <button
+                        className={`px-2 py-1 text-xs rounded-md transition-colors ${currentProvider === 'gemini' ? 'bg-white text-black font-medium' : 'text-white/60 hover:text-white'}`}
+                        onClick={() => setProvider('gemini')}
+                      >
+                        Gemini
+                      </button>
+                      <button
+                        className={`px-2 py-1 text-xs rounded-md transition-colors ${currentProvider === 'lmstudio' ? 'bg-white text-black font-medium' : 'text-white/60 hover:text-white'}`}
+                        onClick={() => setProvider('lmstudio')}
+                      >
+                        LM Studio
+                      </button>
                     </div>
                   </div>
-                );
-              })}
+
+                  {/* Model Selection (only for Gemini) */}
+                  {currentProvider === 'gemini' && (
+                    <div className="grid grid-cols-1 gap-1 pl-2 border-l border-white/10">
+                      {category.geminiModels.map((m) => (
+                        <div
+                          key={m.id}
+                          className={`p-2 rounded-lg cursor-pointer flex items-center gap-2 transition-colors ${currentValue === m.id
+                            ? "bg-white/10 border border-white/20"
+                            : "hover:bg-white/5 border border-transparent"
+                            }`}
+                          onClick={() => setValue(m.id)}
+                        >
+                          <div className={`w-2 h-2 rounded-full ${currentValue === m.id ? "bg-green-400" : "bg-white/10"}`} />
+                          <div className="flex-1">
+                            <p className="font-medium text-white text-xs">{m.name}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {currentProvider === 'lmstudio' && (
+                    <div className="pl-2 border-l border-white/10 text-[10px] text-white/50 italic py-1">
+                      Using model defined in LM Studio Configuration
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="pt-2 border-t border-white/10">
+            <h3 className="text-xs font-medium text-white mb-2">Keyboard Shortcuts</h3>
+            <div className="grid grid-cols-2 gap-y-1 text-[10px] text-white/60">
+              <span>Toggle Visibility</span> <span className="text-white/80 font-mono">Ctrl+B</span>
+              <span>Take Screenshot</span> <span className="text-white/80 font-mono">Ctrl+H</span>
+              <span>Process</span> <span className="text-white/80 font-mono">Ctrl+Enter</span>
+              <span>Quit</span> <span className="text-white/80 font-mono">Ctrl+Q</span>
             </div>
-          )}
+          </div>
+
         </div>
-        <DialogFooter className="flex justify-between sm:justify-between">
-          <Button
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-            className="border-white/10 hover:bg-white/5 text-white"
-          >
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => handleOpenChange(false)} className="border-white/10 text-white hover:bg-white/5">
             Cancel
           </Button>
-          <Button
-            className="px-4 py-3 bg-white text-black rounded-xl font-medium hover:bg-white/90 transition-colors"
-            onClick={handleSave}
-            disabled={isLoading || (apiProvider !== "lmstudio" && !apiKey)}
-          >
-            {isLoading ? "Saving..." : "Save Settings"}
+          <Button onClick={handleSave} disabled={isLoading} className="bg-white text-black hover:bg-white/90">
+            {isLoading ? "Saving..." : "Save Changes"}
           </Button>
         </DialogFooter>
       </DialogContent>
