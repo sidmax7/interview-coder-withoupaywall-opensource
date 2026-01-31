@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { Settings } from "lucide-react";
 import { useToast } from "../../contexts/toast";
 
-type APIProvider = "openai" | "gemini" | "anthropic" | "lmstudio";
+type APIProvider = "gemini" | "lmstudio";  // Only Gemini and LM Studio supported
 
 type AIModel = {
   id: string;
@@ -25,9 +25,7 @@ type ModelCategory = {
   key: 'extractionModel' | 'solutionModel' | 'debuggingModel';
   title: string;
   description: string;
-  openaiModels: AIModel[];
   geminiModels: AIModel[];
-  anthropicModels: AIModel[];
   lmstudioModels?: AIModel[];  // Optional for LM Studio
 };
 
@@ -37,45 +35,31 @@ const modelCategories: ModelCategory[] = [
     key: 'extractionModel',
     title: 'Problem Extraction',
     description: 'Model used to analyze screenshots and extract problem details',
-    openaiModels: [
+    geminiModels: [
       {
-        id: "gpt-4o",
-        name: "gpt-4o",
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
         description: "Best overall performance for problem extraction"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    geminiModels: [
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        description: "Latest experimental model"
+      },
       {
-        id: "gemini-1.5-pro",
-        name: "Gemini 1.5 Pro",
-        description: "Best overall performance for problem extraction"
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        description: "Latest pro experimental model"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    anthropicModels: [
-      {
-        id: "claude-3-7-sonnet-20250219",
-        name: "Claude 3.7 Sonnet",
-        description: "Best overall performance for problem extraction"
+        description: "Fast and cost-effective option"
       },
       {
-        id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3.5 Sonnet",
-        description: "Balanced performance and speed"
-      },
-      {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
-        description: "Top-level intelligence, fluency, and understanding"
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Most capable model for complex tasks"
       }
     ]
   },
@@ -83,45 +67,31 @@ const modelCategories: ModelCategory[] = [
     key: 'solutionModel',
     title: 'Solution Generation',
     description: 'Model used to generate coding solutions',
-    openaiModels: [
+    geminiModels: [
       {
-        id: "gpt-4o",
-        name: "gpt-4o",
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
         description: "Strong overall performance for coding tasks"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    geminiModels: [
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        description: "Latest experimental model"
+      },
       {
-        id: "gemini-1.5-pro",
-        name: "Gemini 1.5 Pro",
-        description: "Strong overall performance for coding tasks"
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        description: "Latest pro experimental model"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    anthropicModels: [
-      {
-        id: "claude-3-7-sonnet-20250219",
-        name: "Claude 3.7 Sonnet",
-        description: "Strong overall performance for coding tasks"
+        description: "Fast and cost-effective option"
       },
       {
-        id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3.5 Sonnet",
-        description: "Balanced performance and speed"
-      },
-      {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
-        description: "Top-level intelligence, fluency, and understanding"
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Most capable model for complex tasks"
       }
     ]
   },
@@ -129,45 +99,31 @@ const modelCategories: ModelCategory[] = [
     key: 'debuggingModel',
     title: 'Debugging',
     description: 'Model used to debug and improve solutions',
-    openaiModels: [
+    geminiModels: [
       {
-        id: "gpt-4o",
-        name: "gpt-4o",
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
         description: "Best for analyzing code and error messages"
       },
       {
-        id: "gpt-4o-mini",
-        name: "gpt-4o-mini",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    geminiModels: [
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        description: "Latest experimental model"
+      },
       {
-        id: "gemini-1.5-pro",
-        name: "Gemini 1.5 Pro",
-        description: "Best for analyzing code and error messages"
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        description: "Latest pro experimental model"
       },
       {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        description: "Faster, more cost-effective option"
-      }
-    ],
-    anthropicModels: [
-      {
-        id: "claude-3-7-sonnet-20250219",
-        name: "Claude 3.7 Sonnet",
-        description: "Best for analyzing code and error messages"
+        description: "Fast and cost-effective option"
       },
       {
-        id: "claude-3-5-sonnet-20241022",
-        name: "Claude 3.5 Sonnet",
-        description: "Balanced performance and speed"
-      },
-      {
-        id: "claude-3-opus-20240229",
-        name: "Claude 3 Opus",
-        description: "Top-level intelligence, fluency, and understanding"
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        description: "Most capable model for complex tasks"
       }
     ]
   }
@@ -181,10 +137,10 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDialogProps) {
   const [open, setOpen] = useState(externalOpen || false);
   const [apiKey, setApiKey] = useState("");
-  const [apiProvider, setApiProvider] = useState<APIProvider>("openai");
-  const [extractionModel, setExtractionModel] = useState("gpt-4o");
-  const [solutionModel, setSolutionModel] = useState("gpt-4o");
-  const [debuggingModel, setDebuggingModel] = useState("gpt-4o");
+  const [apiProvider, setApiProvider] = useState<APIProvider>("gemini");
+  const [extractionModel, setExtractionModel] = useState("gemini-2.5-flash");
+  const [solutionModel, setSolutionModel] = useState("gemini-2.5-flash");
+  const [debuggingModel, setDebuggingModel] = useState("gemini-2.5-flash");
   const [isLoading, setIsLoading] = useState(false);
   const [lmstudioEndpoint, setLmstudioEndpoint] = useState("http://localhost:1234/v1");
   const [lmstudioModel, setLmstudioModel] = useState("qwen3-vl-8b");
@@ -225,10 +181,10 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
         .getConfig()
         .then((config: Config) => {
           setApiKey(config.apiKey || "");
-          setApiProvider(config.apiProvider || "openai");
-          setExtractionModel(config.extractionModel || "gpt-4o");
-          setSolutionModel(config.solutionModel || "gpt-4o");
-          setDebuggingModel(config.debuggingModel || "gpt-4o");
+          setApiProvider(config.apiProvider || "gemini");
+          setExtractionModel(config.extractionModel || "gemini-2.5-flash");
+          setSolutionModel(config.solutionModel || "gemini-2.5-flash");
+          setDebuggingModel(config.debuggingModel || "gemini-2.5-flash");
           setLmstudioEndpoint(config.lmstudioEndpoint || "http://localhost:1234/v1");
           setLmstudioModel(config.lmstudioModel || "qwen3-vl-8b");
         })
@@ -247,18 +203,10 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
     setApiProvider(provider);
 
     // Reset models to defaults when changing provider
-    if (provider === "openai") {
-      setExtractionModel("gpt-4o");
-      setSolutionModel("gpt-4o");
-      setDebuggingModel("gpt-4o");
-    } else if (provider === "gemini") {
-      setExtractionModel("gemini-1.5-pro");
-      setSolutionModel("gemini-1.5-pro");
-      setDebuggingModel("gemini-1.5-pro");
-    } else if (provider === "anthropic") {
-      setExtractionModel("claude-3-7-sonnet-20250219");
-      setSolutionModel("claude-3-7-sonnet-20250219");
-      setDebuggingModel("claude-3-7-sonnet-20250219");
+    if (provider === "gemini") {
+      setExtractionModel("gemini-2.5-flash");
+      setSolutionModel("gemini-2.5-flash");
+      setDebuggingModel("gemini-2.5-flash");
     } else if (provider === "lmstudio") {
       // LM Studio uses a single model for all tasks
       setExtractionModel(lmstudioModel);
@@ -352,24 +300,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
             <label className="text-sm font-medium text-white">API Provider</label>
             <div className="flex gap-2">
               <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${apiProvider === "openai"
-                  ? "bg-white/10 border border-white/20"
-                  : "bg-black/30 border border-white/5 hover:bg-white/5"
-                  }`}
-                onClick={() => handleProviderChange("openai")}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded-full ${apiProvider === "openai" ? "bg-white" : "bg-white/20"
-                      }`}
-                  />
-                  <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">OpenAI</p>
-                    <p className="text-xs text-white/60">GPT-4o models</p>
-                  </div>
-                </div>
-              </div>
-              <div
                 className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${apiProvider === "gemini"
                   ? "bg-white/10 border border-white/20"
                   : "bg-black/30 border border-white/5 hover:bg-white/5"
@@ -384,24 +314,6 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                   <div className="flex flex-col">
                     <p className="font-medium text-white text-sm">Gemini</p>
                     <p className="text-xs text-white/60">Gemini 1.5 models</p>
-                  </div>
-                </div>
-              </div>
-              <div
-                className={`flex-1 p-2 rounded-lg cursor-pointer transition-colors ${apiProvider === "anthropic"
-                  ? "bg-white/10 border border-white/20"
-                  : "bg-black/30 border border-white/5 hover:bg-white/5"
-                  }`}
-                onClick={() => handleProviderChange("anthropic")}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded-full ${apiProvider === "anthropic" ? "bg-white" : "bg-white/20"
-                      }`}
-                  />
-                  <div className="flex flex-col">
-                    <p className="font-medium text-white text-sm">Claude</p>
-                    <p className="text-xs text-white/60">Claude 3 models</p>
                   </div>
                 </div>
               </div>
@@ -462,23 +374,17 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                 </div>
               </>
             ) : (
-              // Cloud API key configuration
+              // Cloud API key configuration (Gemini)
               <>
                 <label className="text-sm font-medium text-white" htmlFor="apiKey">
-                  {apiProvider === "openai" ? "OpenAI API Key" :
-                    apiProvider === "gemini" ? "Gemini API Key" :
-                      "Anthropic API Key"}
+                  Gemini API Key
                 </label>
                 <Input
                   id="apiKey"
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={
-                    apiProvider === "openai" ? "sk-..." :
-                      apiProvider === "gemini" ? "Enter your Gemini API key" :
-                        "sk-ant-..."
-                  }
+                  placeholder="Enter your Gemini API key"
                   className="bg-black/50 border-white/10 text-white"
                 />
                 {apiKey && (
@@ -487,47 +393,19 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
                   </p>
                 )}
                 <p className="text-xs text-white/50">
-                  Your API key is stored locally and never sent to any server except {apiProvider === "openai" ? "OpenAI" : "Google"}
+                  Your API key is stored locally and never sent to any server except Google
                 </p>
                 <div className="mt-2 p-2 rounded-md bg-white/5 border border-white/10">
                   <p className="text-xs text-white/80 mb-1">Don't have an API key?</p>
-                  {apiProvider === "openai" ? (
-                    <>
-                      <p className="text-xs text-white/60 mb-1">1. Create an account at <button
-                        onClick={() => openExternalLink('https://platform.openai.com/signup')}
-                        className="text-blue-400 hover:underline cursor-pointer">OpenAI</button>
-                      </p>
-                      <p className="text-xs text-white/60 mb-1">2. Go to <button
-                        onClick={() => openExternalLink('https://platform.openai.com/api-keys')}
-                        className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                      </p>
-                      <p className="text-xs text-white/60">3. Create a new secret key and paste it here</p>
-                    </>
-                  ) : apiProvider === "gemini" ? (
-                    <>
-                      <p className="text-xs text-white/60 mb-1">1. Create an account at <button
-                        onClick={() => openExternalLink('https://aistudio.google.com/')}
-                        className="text-blue-400 hover:underline cursor-pointer">Google AI Studio</button>
-                      </p>
-                      <p className="text-xs text-white/60 mb-1">2. Go to the <button
-                        onClick={() => openExternalLink('https://aistudio.google.com/app/apikey')}
-                        className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                      </p>
-                      <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-xs text-white/60 mb-1">1. Create an account at <button
-                        onClick={() => openExternalLink('https://console.anthropic.com/signup')}
-                        className="text-blue-400 hover:underline cursor-pointer">Anthropic</button>
-                      </p>
-                      <p className="text-xs text-white/60 mb-1">2. Go to the <button
-                        onClick={() => openExternalLink('https://console.anthropic.com/settings/keys')}
-                        className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
-                      </p>
-                      <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
-                    </>
-                  )}
+                  <p className="text-xs text-white/60 mb-1">1. Create an account at <button
+                    onClick={() => openExternalLink('https://aistudio.google.com/')}
+                    className="text-blue-400 hover:underline cursor-pointer">Google AI Studio</button>
+                  </p>
+                  <p className="text-xs text-white/60 mb-1">2. Go to the <button
+                    onClick={() => openExternalLink('https://aistudio.google.com/app/apikey')}
+                    className="text-blue-400 hover:underline cursor-pointer">API Keys</button> section
+                  </p>
+                  <p className="text-xs text-white/60">3. Create a new API key and paste it here</p>
                 </div>
               </>
             )}
@@ -584,11 +462,8 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
               </p>
 
               {modelCategories.map((category) => {
-                // Get the appropriate model list based on selected provider
-                const models =
-                  apiProvider === "openai" ? category.openaiModels :
-                    apiProvider === "gemini" ? category.geminiModels :
-                      category.anthropicModels;
+                // Get the Gemini model list (only cloud provider now)
+                const models = category.geminiModels;
 
                 return (
                   <div key={category.key} className="mb-4">
