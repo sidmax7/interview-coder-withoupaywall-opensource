@@ -189,7 +189,7 @@ export class ScreenshotHelper {
         `Taking Windows screenshot to temp file (Method 1): ${tempFile}`
       );
 
-      await screenshot({ filename: tempFile });
+      await screenshot({ filename: tempFile, screen: 0 }); // Capture only primary screen
 
       if (fs.existsSync(tempFile)) {
         const buffer = await fs.promises.readFile(tempFile);
@@ -217,15 +217,11 @@ export class ScreenshotHelper {
         console.log("Attempting Windows screenshot with PowerShell (Method 2)");
         const tempFile = path.join(this.tempDir, `ps-temp-${uuidv4()}.png`);
 
-        // PowerShell command to take screenshot using .NET classes
+        // PowerShell command to take screenshot using .NET classes - PRIMARY SCREEN ONLY
         const psScript = `
         Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-        $screens = [System.Windows.Forms.Screen]::AllScreens
-        $top = ($screens | ForEach-Object {$_.Bounds.Top} | Measure-Object -Minimum).Minimum
-        $left = ($screens | ForEach-Object {$_.Bounds.Left} | Measure-Object -Minimum).Minimum
-        $width = ($screens | ForEach-Object {$_.Bounds.Right} | Measure-Object -Maximum).Maximum
-        $height = ($screens | ForEach-Object {$_.Bounds.Bottom} | Measure-Object -Maximum).Maximum
-        $bounds = [System.Drawing.Rectangle]::FromLTRB($left, $top, $width, $height)
+        $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+        $bounds = $primaryScreen.Bounds
         $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
         $graphics = [System.Drawing.Graphics]::FromImage($bmp)
         $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bounds.Size)

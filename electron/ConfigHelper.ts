@@ -46,7 +46,7 @@ export class ConfigHelper extends EventEmitter {
     language: "python",
     opacity: 1.0,
     lmstudioEndpoint: "http://localhost:1234/v1",
-    lmstudioModel: "qwen3-vl-8b"
+    lmstudioModel: "zai-org/glm-4.6v-flash"
   };
 
   constructor() {
@@ -186,7 +186,7 @@ export class ConfigHelper extends EventEmitter {
         if (newProvider !== oldProvider) {
           if (newProvider === "lmstudio") {
             // If switching to LM Studio, use the generic LM model
-            (updates as any)[modelKey] = currentConfig.lmstudioModel || "qwen3-vl-8b";
+            (updates as any)[modelKey] = currentConfig.lmstudioModel || "zai-org/glm-4.6v-flash";
           } else {
             // If switching to Gemini, reset to default Gemini model
             (updates as any)[modelKey] = "gemini-2.0-flash";

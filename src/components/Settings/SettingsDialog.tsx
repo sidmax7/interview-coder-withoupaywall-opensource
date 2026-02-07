@@ -151,7 +151,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
 
   const [isLoading, setIsLoading] = useState(false);
   const [lmstudioEndpoint, setLmstudioEndpoint] = useState("http://localhost:1234/v1");
-  const [lmstudioModel, setLmstudioModel] = useState("qwen3-vl-8b");
+  const [lmstudioModel, setLmstudioModel] = useState("zai-org/glm-4.6v-flash");
 
   const { showToast } = useToast();
 
@@ -193,7 +193,7 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           setSystemPrompt(config.systemPrompt || "");
 
           setLmstudioEndpoint(config.lmstudioEndpoint || "http://localhost:1234/v1");
-          setLmstudioModel(config.lmstudioModel || "qwen3-vl-8b");
+          setLmstudioModel(config.lmstudioModel || "zai-org/glm-4.6v-flash");
         })
         .catch((error: unknown) => {
           console.error("Failed to load config:", error);

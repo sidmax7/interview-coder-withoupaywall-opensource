@@ -419,7 +419,7 @@ export class ProcessingHelper {
       let problemInfo;
 
       if (config.extractionProvider === "gemini") {
-        // Use Gemini API
+        // Use Gemini API - Combined extraction AND solution generation
         if (!this.geminiApiKey) {
           return {
             success: false,
@@ -428,13 +428,49 @@ export class ProcessingHelper {
         }
 
         try {
+          const systemPrompt = config.systemPrompt || "";
+          const baseSystemInstruction = "You are an expert coding interview assistant. Analyze the screenshot and provide both problem extraction and a complete solution.";
+          const fullSystemInstruction = systemPrompt
+            ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
+            : baseSystemInstruction;
+
+          // Combined prompt for extraction AND solution
+          const combinedPrompt = `${fullSystemInstruction}
+
+Analyze the screenshot(s) of a coding problem and provide a complete response.
+
+IMPORTANT INSTRUCTIONS:
+1. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
+2. If it IS a coding problem, provide a complete solution.
+
+Return your response in the following JSON format:
+{
+  "problem": {
+    "problem_statement": "The problem description",
+    "constraints": "Any constraints mentioned",
+    "example_input": "Example input if provided",
+    "example_output": "Example output if provided"
+  },
+  "solution": {
+    "code": "Your complete code solution in ${language}",
+    "thoughts": ["Key insight 1", "Key insight 2", "..."],
+    "time_complexity": "O(X) - Explanation",
+    "space_complexity": "O(X) - Explanation"
+  },
+  "is_technical": true
+}
+
+For non-technical questions, set is_technical to false and put your answer in solution.code with empty thoughts array and "N/A" for complexities.
+
+Return ONLY valid JSON, no markdown code blocks.`;
+
           // Create Gemini message structure
           const geminiMessages: GeminiMessage[] = [
             {
               role: "user",
               parts: [
                 {
-                  text: `You are a coding challenge interpreter. Analyze the screenshots of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text. Preferred coding language we gonna use for this problem is ${language}.`
+                  text: combinedPrompt
                 },
                 ...imageDataList.map(data => ({
                   inlineData: {
@@ -469,7 +505,67 @@ export class ProcessingHelper {
 
           // Handle when Gemini might wrap the JSON in markdown code blocks
           const jsonText = responseText.replace(/```json|```/g, '').trim();
-          problemInfo = JSON.parse(jsonText);
+          const combinedResponse = JSON.parse(jsonText);
+
+          // Extract problem info
+          problemInfo = combinedResponse.problem;
+
+          // Store the solution data for later use
+          const solutionData = {
+            code: combinedResponse.solution?.code || "",
+            thoughts: combinedResponse.solution?.thoughts || [],
+            time_complexity: combinedResponse.solution?.time_complexity || "N/A",
+            space_complexity: combinedResponse.solution?.space_complexity || "N/A",
+            is_technical: combinedResponse.is_technical !== false
+          };
+
+          // Handle non-technical responses
+          if (!solutionData.is_technical) {
+            solutionData.thoughts = ["Non-technical question detected.", "Answer provided in plain text."];
+            solutionData.time_complexity = "N/A";
+            solutionData.space_complexity = "N/A";
+          }
+
+          // Store problem info in AppState
+          this.deps.setProblemInfo(problemInfo);
+
+          // Send problem extracted event
+          if (mainWindow) {
+            mainWindow.webContents.send(
+              this.deps.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+              problemInfo
+            );
+
+            // Clear any existing extra screenshots before transitioning to solutions view
+            this.screenshotHelper.clearExtraScreenshotQueue();
+
+            // Final progress update
+            mainWindow.webContents.send("processing-status", {
+              message: "Solution generated successfully",
+              progress: 100
+            });
+
+            // Send solution success event with combined data
+            mainWindow.webContents.send(
+              this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
+              {
+                code: solutionData.code,
+                thoughts: solutionData.thoughts,
+                time_complexity: solutionData.time_complexity,
+                space_complexity: solutionData.space_complexity
+              }
+            );
+
+            return {
+              success: true,
+              data: {
+                code: solutionData.code,
+                thoughts: solutionData.thoughts,
+                time_complexity: solutionData.time_complexity,
+                space_complexity: solutionData.space_complexity
+              }
+            };
+          }
         } catch (error: any) {
           console.error("Error using Gemini API:", error);
           const errorMessage = error.response?.data?.error?.message || error.message || "Unknown error";
@@ -479,7 +575,7 @@ export class ProcessingHelper {
           };
         }
       } else if (config.extractionProvider === "lmstudio") {
-        // LM Studio processing using OpenAI-compatible API
+        // LM Studio processing using OpenAI-compatible API - Combined extraction AND solution generation
         if (!this.lmstudioClient) {
           return {
             success: false,
@@ -488,20 +584,53 @@ export class ProcessingHelper {
         }
 
         try {
-          const modelName = config.extractionModel || config.lmstudioModel || "qwen3-vl-8b";
+          const modelName = config.extractionModel || config.lmstudioModel || "zai-org/glm-4.6v-flash";
+          const systemPrompt = config.systemPrompt || "";
+          const baseSystemInstruction = "You are an expert coding interview assistant. Analyze the screenshot and provide both problem extraction and a complete solution.";
+          const fullSystemInstruction = systemPrompt
+            ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
+            : baseSystemInstruction;
+
+          // Combined prompt for extraction AND solution
+          const combinedPrompt = `Analyze the screenshot(s) of a coding problem and provide a complete response.
+
+IMPORTANT INSTRUCTIONS:
+1. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
+2. If it IS a coding problem, provide a complete solution in ${language}.
+
+Return your response in the following JSON format:
+{
+  "problem": {
+    "problem_statement": "The problem description",
+    "constraints": "Any constraints mentioned",
+    "example_input": "Example input if provided",
+    "example_output": "Example output if provided"
+  },
+  "solution": {
+    "code": "Your complete code solution in ${language}",
+    "thoughts": ["Key insight 1", "Key insight 2", "..."],
+    "time_complexity": "O(X) - Explanation",
+    "space_complexity": "O(X) - Explanation"
+  },
+  "is_technical": true
+}
+
+For non-technical questions, set is_technical to false and put your answer in solution.code with empty thoughts array and "N/A" for complexities.
+
+Return ONLY valid JSON, no markdown code blocks.`;
 
           // Build messages with vision content for LM Studio
           const messages = [
             {
               role: "system" as const,
-              content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
+              content: fullSystemInstruction
             },
             {
               role: "user" as const,
               content: [
                 {
                   type: "text" as const,
-                  text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
+                  text: combinedPrompt
                 },
                 ...imageDataList.map(data => ({
                   type: "image_url" as const,
@@ -514,16 +643,76 @@ export class ProcessingHelper {
           const response = await this.lmstudioClient.chat.completions.create({
             model: modelName,
             messages: messages,
-            max_tokens: 4000,
+            max_tokens: 8000,
             temperature: 0.2
           });
 
           const responseText = response.choices[0].message.content;
           // Handle when model might wrap the JSON in markdown code blocks
           const jsonText = responseText.replace(/```json|```/g, '').trim();
-          problemInfo = JSON.parse(jsonText);
+          const combinedResponse = JSON.parse(jsonText);
 
-          console.log("LM Studio extraction successful:", problemInfo);
+          // Extract problem info
+          problemInfo = combinedResponse.problem;
+
+          // Store the solution data
+          const solutionData = {
+            code: combinedResponse.solution?.code || "",
+            thoughts: combinedResponse.solution?.thoughts || [],
+            time_complexity: combinedResponse.solution?.time_complexity || "N/A",
+            space_complexity: combinedResponse.solution?.space_complexity || "N/A",
+            is_technical: combinedResponse.is_technical !== false
+          };
+
+          // Handle non-technical responses
+          if (!solutionData.is_technical) {
+            solutionData.thoughts = ["Non-technical question detected.", "Answer provided in plain text."];
+            solutionData.time_complexity = "N/A";
+            solutionData.space_complexity = "N/A";
+          }
+
+          console.log("LM Studio combined extraction+solution successful");
+
+          // Store problem info in AppState
+          this.deps.setProblemInfo(problemInfo);
+
+          // Send problem extracted event
+          if (mainWindow) {
+            mainWindow.webContents.send(
+              this.deps.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+              problemInfo
+            );
+
+            // Clear any existing extra screenshots before transitioning to solutions view
+            this.screenshotHelper.clearExtraScreenshotQueue();
+
+            // Final progress update
+            mainWindow.webContents.send("processing-status", {
+              message: "Solution generated successfully",
+              progress: 100
+            });
+
+            // Send solution success event with combined data
+            mainWindow.webContents.send(
+              this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
+              {
+                code: solutionData.code,
+                thoughts: solutionData.thoughts,
+                time_complexity: solutionData.time_complexity,
+                space_complexity: solutionData.space_complexity
+              }
+            );
+
+            return {
+              success: true,
+              data: {
+                code: solutionData.code,
+                thoughts: solutionData.thoughts,
+                time_complexity: solutionData.time_complexity,
+                space_complexity: solutionData.space_complexity
+              }
+            };
+          }
         } catch (error: any) {
           console.error("Error using LM Studio:", error);
 
@@ -541,49 +730,9 @@ export class ProcessingHelper {
         }
       }
 
-      // Update the user on progress
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Problem analyzed successfully. Preparing to generate solution...",
-          progress: 40
-        });
-      }
-
-      // Store problem info in AppState
-      this.deps.setProblemInfo(problemInfo);
-
-      // Send first success event
-      if (mainWindow) {
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
-          problemInfo
-        );
-
-        // Generate solutions after successful extraction
-        const solutionsResult = await this.generateSolutionsHelper(signal);
-        if (solutionsResult.success) {
-          // Clear any existing extra screenshots before transitioning to solutions view
-          this.screenshotHelper.clearExtraScreenshotQueue();
-
-          // Final progress update
-          mainWindow.webContents.send("processing-status", {
-            message: "Solution generated successfully",
-            progress: 100
-          });
-
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
-            solutionsResult.data
-          );
-          return { success: true, data: solutionsResult.data };
-        } else {
-          throw new Error(
-            solutionsResult.error || "Failed to generate solutions"
-          );
-        }
-      }
-
-      return { success: false, error: "Failed to process screenshots" };
+      // This point should not be reached with Gemini or LM Studio providers
+      // as they now return early with combined extraction+solution
+      return { success: false, error: "No valid extraction provider configured" };
     } catch (error: any) {
       // If the request was cancelled, don't retry
       if (axios.isCancel(error)) {
@@ -640,7 +789,7 @@ export class ProcessingHelper {
 
       // Create prompt for solution generation
       const systemPrompt = config.systemPrompt || "";
-      const baseSystemInstruction = "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations.";
+      const baseSystemInstruction = "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations. If the question is theoretical, provide a comprehensive answer.";
 
       const fullSystemInstruction = systemPrompt
         ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
@@ -664,7 +813,7 @@ ${problemInfo.example_output || "No example output provided."}
 LANGUAGE: ${language}
 
 IMPORTANT INSTRUCTIONS:
-1. If the input is NOT a coding problem (e.g., general question, simple chat), IGNORE strict formatting and answer in plain text.
+1. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), answer it clearly and comprehensively in plain text. Do NOT force code blocks if they are not needed.
 2. If it IS a coding problem, you MUST follow this format:
    1. Code: A clean, optimized implementation in ${language}
    2. Your Thoughts: A list of key insights and reasoning behind your approach
@@ -736,7 +885,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
         }
 
         try {
-          const modelName = config.solutionModel || config.lmstudioModel || "qwen3-vl-8b";
+          const modelName = config.solutionModel || config.lmstudioModel || "zai-org/glm-4.6v-flash";
 
           const response = await this.lmstudioClient.chat.completions.create({
             model: modelName,
