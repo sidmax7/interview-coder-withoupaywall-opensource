@@ -40,6 +40,63 @@ export class ProcessingHelper {
   private currentProcessingAbortController: AbortController | null = null
   private currentExtraProcessingAbortController: AbortController | null = null
 
+  // Conversation history for follow-up questions
+  private conversationHistory: Array<{
+    role: "user" | "model";
+    problemStatement: string;
+    response: string;
+    timestamp: number;
+  }> = [];
+  private readonly MAX_CONVERSATION_HISTORY = 5;
+
+  /**
+   * Clear conversation history (called on explicit reset, not on new questions)
+   */
+  public clearConversationHistory(): void {
+    this.conversationHistory = [];
+    console.log("Conversation history cleared");
+  }
+
+  /**
+   * Get formatted conversation history for API context
+   */
+  private getConversationContext(): string {
+    if (this.conversationHistory.length === 0) {
+      return "";
+    }
+
+    const contextParts = this.conversationHistory.map((entry, index) => {
+      return `--- Previous Exchange ${index + 1} ---
+Question: ${entry.problemStatement}
+Answer: ${entry.response}`;
+    });
+
+    return `CONVERSATION HISTORY (for context on follow-up questions):
+${contextParts.join("\n\n")}
+
+--- CURRENT QUESTION ---
+`;
+  }
+
+  /**
+   * Add a Q&A exchange to conversation history
+   */
+  private addToConversationHistory(problemStatement: string, response: string): void {
+    this.conversationHistory.push({
+      role: "model",
+      problemStatement,
+      response,
+      timestamp: Date.now()
+    });
+
+    // Keep only the last MAX_CONVERSATION_HISTORY exchanges
+    if (this.conversationHistory.length > this.MAX_CONVERSATION_HISTORY) {
+      this.conversationHistory.shift();
+    }
+
+    console.log(`Added to conversation history. Total exchanges: ${this.conversationHistory.length}`);
+  }
+
   constructor(deps: IProcessingHelperDeps) {
     this.deps = deps
     this.screenshotHelper = deps.getScreenshotHelper()
@@ -434,14 +491,18 @@ export class ProcessingHelper {
             ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
             : baseSystemInstruction;
 
+          // Get conversation history context for follow-up questions
+          const conversationContext = this.getConversationContext();
+
           // Combined prompt for extraction AND solution
           const combinedPrompt = `${fullSystemInstruction}
 
-Analyze the screenshot(s) of a coding problem and provide a complete response.
+${conversationContext}Analyze the screenshot(s) of a coding problem and provide a complete response.
 
 IMPORTANT INSTRUCTIONS:
-1. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
-2. If it IS a coding problem, provide a complete solution.
+1. If this appears to be a FOLLOW-UP question (referencing previous context), use the conversation history above to provide a contextual answer.
+2. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
+3. If it IS a coding problem, provide a complete solution.
 
 Return your response in the following JSON format:
 {
@@ -529,6 +590,12 @@ Return ONLY valid JSON, no markdown code blocks.`;
           // Store problem info in AppState
           this.deps.setProblemInfo(problemInfo);
 
+          // Add to conversation history for follow-up questions
+          this.addToConversationHistory(
+            problemInfo.problem_statement || "Question from screenshot",
+            solutionData.code || "No code response"
+          );
+
           // Send problem extracted event
           if (mainWindow) {
             mainWindow.webContents.send(
@@ -591,12 +658,16 @@ Return ONLY valid JSON, no markdown code blocks.`;
             ? `${baseSystemInstruction}\n\nUSER CONFIGURATION:\n${systemPrompt}`
             : baseSystemInstruction;
 
+          // Get conversation history context for follow-up questions
+          const conversationContext = this.getConversationContext();
+
           // Combined prompt for extraction AND solution
-          const combinedPrompt = `Analyze the screenshot(s) of a coding problem and provide a complete response.
+          const combinedPrompt = `${conversationContext}Analyze the screenshot(s) of a coding problem and provide a complete response.
 
 IMPORTANT INSTRUCTIONS:
-1. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
-2. If it IS a coding problem, provide a complete solution in ${language}.
+1. If this appears to be a FOLLOW-UP question (referencing previous context), use the conversation history above to provide a contextual answer.
+2. If the input is NOT a coding problem (e.g., general question, theoretical discussion, or simple chat), provide a clear answer in plain text.
+3. If it IS a coding problem, provide a complete solution in ${language}.
 
 Return your response in the following JSON format:
 {
@@ -675,6 +746,12 @@ Return ONLY valid JSON, no markdown code blocks.`;
 
           // Store problem info in AppState
           this.deps.setProblemInfo(problemInfo);
+
+          // Add to conversation history for follow-up questions
+          this.addToConversationHistory(
+            problemInfo.problem_statement || "Question from screenshot",
+            solutionData.code || "No code response"
+          );
 
           // Send problem extracted event
           if (mainWindow) {

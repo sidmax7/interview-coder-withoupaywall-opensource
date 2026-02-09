@@ -172,7 +172,66 @@ export class ScreenshotHelper {
       return buffer;
     } catch (error) {
       console.error("Error capturing screenshot:", error);
-      throw new Error(`Failed to capture screenshot: ${error.message}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to capture screenshot: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Helper to wrap a promise with a timeout
+   */
+  private withTimeout<T>(promise: Promise<T>, ms: number, errorMessage: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(errorMessage));
+      }, ms);
+
+      promise
+        .then((result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        })
+        .catch((err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+    });
+  }
+
+  /**
+   * Validate that a buffer contains a valid PNG image
+   */
+  private isValidPng(buffer: Buffer): boolean {
+    // PNG signature: 137 80 78 71 13 10 26 10
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (buffer.length < 8) return false;
+    return buffer.subarray(0, 8).equals(pngSignature);
+  }
+
+  /**
+   * Clean up any stale temp files from previous failed attempts
+   */
+  private async cleanupTempFiles(): Promise<void> {
+    try {
+      if (fs.existsSync(this.tempDir)) {
+        const files = fs.readdirSync(this.tempDir);
+        const now = Date.now();
+        for (const file of files) {
+          const filePath = path.join(this.tempDir, file);
+          try {
+            const stats = fs.statSync(filePath);
+            // Delete files older than 5 minutes
+            if (now - stats.mtimeMs > 5 * 60 * 1000) {
+              fs.unlinkSync(filePath);
+              console.log(`Cleaned up stale temp file: ${filePath}`);
+            }
+          } catch (err) {
+            // Ignore errors for individual files
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Error cleaning up temp files:", err);
     }
   }
 
@@ -182,117 +241,170 @@ export class ScreenshotHelper {
   private async captureWindowsScreenshot(): Promise<Buffer> {
     console.log("Attempting Windows screenshot with multiple methods");
 
-    // Method 1: Try screenshot-desktop with filename first
-    try {
-      const tempFile = path.join(this.tempDir, `temp-${uuidv4()}.png`);
-      console.log(
-        `Taking Windows screenshot to temp file (Method 1): ${tempFile}`
-      );
+    // Clean up any stale temp files first
+    await this.cleanupTempFiles();
 
-      await screenshot({ filename: tempFile, screen: 0 }); // Capture only primary screen
+    const errors: string[] = [];
+    const maxRetries = 3;
 
-      if (fs.existsSync(tempFile)) {
-        const buffer = await fs.promises.readFile(tempFile);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`Screenshot attempt ${attempt}/${maxRetries}`);
+
+      // Method 1: Try screenshot-desktop with filename first
+      try {
+        const tempFile = path.join(this.tempDir, `temp-${uuidv4()}.png`);
         console.log(
-          `Method 1 successful, screenshot size: ${buffer.length} bytes`
+          `Taking Windows screenshot to temp file (Method 1): ${tempFile}`
         );
 
-        // Cleanup temp file
-        try {
-          await fs.promises.unlink(tempFile);
-        } catch (cleanupErr) {
-          console.warn("Failed to clean up temp file:", cleanupErr);
-        }
+        // Add timeout to screenshot-desktop (5 seconds)
+        await this.withTimeout(
+          screenshot({ filename: tempFile, screen: 0 }),
+          5000,
+          "screenshot-desktop timed out after 5 seconds"
+        );
 
-        return buffer;
-      } else {
-        console.log("Method 1 failed: File not created");
-        throw new Error("Screenshot file not created");
-      }
-    } catch (error) {
-      console.warn("Windows screenshot Method 1 failed:", error);
-
-      // Method 2: Try using PowerShell
-      try {
-        console.log("Attempting Windows screenshot with PowerShell (Method 2)");
-        const tempFile = path.join(this.tempDir, `ps-temp-${uuidv4()}.png`);
-
-        // PowerShell command to take screenshot using .NET classes - PRIMARY SCREEN ONLY
-        const psScript = `
-        Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-        $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
-        $bounds = $primaryScreen.Bounds
-        $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($bmp)
-        $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bounds.Size)
-        $bmp.Save('${tempFile.replace(
-          /\\/g,
-          "\\\\"
-        )}', [System.Drawing.Imaging.ImageFormat]::Png)
-        $graphics.Dispose()
-        $bmp.Dispose()
-        `;
-
-        // Execute PowerShell
-        await execFileAsync("powershell", [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          psScript,
-        ]);
-
-        // Check if file exists and read it
         if (fs.existsSync(tempFile)) {
           const buffer = await fs.promises.readFile(tempFile);
           console.log(
-            `Method 2 successful, screenshot size: ${buffer.length} bytes`
+            `Method 1 captured, screenshot size: ${buffer.length} bytes`
           );
 
-          // Cleanup
-          try {
-            await fs.promises.unlink(tempFile);
-          } catch (err) {
-            console.warn("Failed to clean up PowerShell temp file:", err);
+          // Validate PNG format
+          if (!this.isValidPng(buffer)) {
+            console.warn("Method 1 produced invalid PNG, trying next method");
+            throw new Error("Invalid PNG format");
           }
 
+          // Check for reasonable size (at least 1KB for a real screenshot)
+          if (buffer.length < 1024) {
+            console.warn("Method 1 produced suspiciously small image, trying next method");
+            throw new Error("Screenshot too small - likely invalid");
+          }
+
+          // Cleanup temp file
+          try {
+            await fs.promises.unlink(tempFile);
+          } catch (cleanupErr) {
+            console.warn("Failed to clean up temp file:", cleanupErr);
+          }
+
+          console.log(`Method 1 successful on attempt ${attempt}`);
           return buffer;
         } else {
-          throw new Error("PowerShell screenshot file not created");
+          console.log("Method 1 failed: File not created");
+          throw new Error("Screenshot file not created");
         }
-      } catch (psError) {
-        console.warn("Windows PowerShell screenshot failed:", psError);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`Windows screenshot Method 1 failed (attempt ${attempt}):`, errorMsg);
+        errors.push(`Method 1 (attempt ${attempt}): ${errorMsg}`);
 
-        // Method 3: Last resort - create a tiny placeholder image
-        console.log(
-          "All screenshot methods failed, creating placeholder image"
-        );
+        // Method 2: Try using PowerShell
+        try {
+          console.log("Attempting Windows screenshot with PowerShell (Method 2)");
+          const tempFile = path.join(this.tempDir, `ps-temp-${uuidv4()}.png`);
 
-        // Create a 1x1 transparent PNG as fallback
-        const fallbackBuffer = Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-          "base64"
-        );
-        console.log("Created placeholder image as fallback");
+          // PowerShell command to take screenshot using .NET classes - PRIMARY SCREEN ONLY
+          // Added explicit error handling and verification in PowerShell script
+          const psScript = `
+          try {
+            Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+            $primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+            if ($null -eq $primaryScreen) {
+              throw "No primary screen detected"
+            }
+            $bounds = $primaryScreen.Bounds
+            if ($bounds.Width -le 0 -or $bounds.Height -le 0) {
+              throw "Invalid screen bounds: $($bounds.Width)x$($bounds.Height)"
+            }
+            Write-Host "Capturing screen: $($bounds.Width)x$($bounds.Height)"
+            $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+            $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bounds.Size)
+            $bmp.Save('${tempFile.replace(/\\/g, "\\\\")}', [System.Drawing.Imaging.ImageFormat]::Png)
+            $graphics.Dispose()
+            $bmp.Dispose()
+            Write-Host "Screenshot saved successfully"
+          } catch {
+            Write-Error $_.Exception.Message
+            exit 1
+          }
+          `;
 
-        // Show the error but return a valid buffer so the app doesn't crash
-        throw new Error(
-          "Could not capture screenshot with any method. Please check your Windows security settings and try again."
-        );
+          // Execute PowerShell with timeout (10 seconds)
+          await this.withTimeout(
+            execFileAsync("powershell", [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              psScript,
+            ]),
+            10000,
+            "PowerShell screenshot timed out after 10 seconds"
+          );
+
+          // Check if file exists and read it
+          if (fs.existsSync(tempFile)) {
+            const buffer = await fs.promises.readFile(tempFile);
+            console.log(
+              `Method 2 captured, screenshot size: ${buffer.length} bytes`
+            );
+
+            // Validate PNG format
+            if (!this.isValidPng(buffer)) {
+              console.warn("Method 2 produced invalid PNG");
+              throw new Error("Invalid PNG format from PowerShell");
+            }
+
+            // Check for reasonable size
+            if (buffer.length < 1024) {
+              console.warn("Method 2 produced suspiciously small image");
+              throw new Error("PowerShell screenshot too small - likely invalid");
+            }
+
+            // Cleanup
+            try {
+              await fs.promises.unlink(tempFile);
+            } catch (err) {
+              console.warn("Failed to clean up PowerShell temp file:", err);
+            }
+
+            console.log(`Method 2 successful on attempt ${attempt}`);
+            return buffer;
+          } else {
+            throw new Error("PowerShell screenshot file not created");
+          }
+        } catch (psError) {
+          const psErrorMsg = psError instanceof Error ? psError.message : String(psError);
+          console.warn(`Windows PowerShell screenshot failed (attempt ${attempt}):`, psErrorMsg);
+          errors.push(`Method 2 (attempt ${attempt}): ${psErrorMsg}`);
+        }
+      }
+
+      // Wait before retrying (exponential backoff)
+      if (attempt < maxRetries) {
+        const delay = 200 * Math.pow(2, attempt - 1); // 200ms, 400ms, 800ms
+        console.log(`Waiting ${delay}ms before retry...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+
+    // All attempts failed - throw comprehensive error
+    const errorSummary = errors.join("; ");
+    console.error("All screenshot methods failed after retries:", errorSummary);
+    throw new Error(
+      `Could not capture screenshot after ${maxRetries} attempts. Errors: ${errorSummary}`
+    );
   }
 
-  public async takeScreenshot(
-    hideMainWindow: () => void,
-    showMainWindow: () => void
-  ): Promise<string> {
+  /**
+   * Take a screenshot and add it to the appropriate queue.
+   * Note: Window hide/show is not needed as the app window is excluded from screen capture.
+   */
+  public async takeScreenshot(): Promise<string> {
     console.log("Taking screenshot in view:", this.view);
-    hideMainWindow();
-
-    // Increased delay for window hiding on Windows
-    const hideDelay = process.platform === "win32" ? 500 : 300;
-    await new Promise((resolve) => setTimeout(resolve, hideDelay));
 
     let screenshotPath = "";
     try {
@@ -301,6 +413,11 @@ export class ScreenshotHelper {
 
       if (!screenshotBuffer || screenshotBuffer.length === 0) {
         throw new Error("Screenshot capture returned empty buffer");
+      }
+
+      // Validate PNG format
+      if (!this.isValidPng(screenshotBuffer)) {
+        throw new Error("Captured screenshot is not a valid PNG");
       }
 
       // Save and manage the screenshot based on current view
@@ -355,10 +472,6 @@ export class ScreenshotHelper {
     } catch (error) {
       console.error("Screenshot error:", error);
       throw error;
-    } finally {
-      // Increased delay for showing window again
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      showMainWindow();
     }
 
     return screenshotPath;
@@ -399,7 +512,8 @@ export class ScreenshotHelper {
       return { success: true };
     } catch (error) {
       console.error("Error deleting file:", error);
-      return { success: false, error: error.message };
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      return { success: false, error: errorMsg };
     }
   }
 
