@@ -543,9 +543,11 @@ Return ONLY valid JSON, no markdown code blocks.`;
             }
           ];
 
-          // Make API request to Gemini
+          // Make API request to Gemini with streaming
+          const modelName = config.extractionModel || "gemini-3-flash-preview";
+
           const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.5-flash"}:generateContent?key=${this.geminiApiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
               generationConfig: {
@@ -553,16 +555,156 @@ Return ONLY valid JSON, no markdown code blocks.`;
                 maxOutputTokens: 8192
               }
             },
-            { signal }
+            {
+              signal,
+              responseType: 'stream'
+            }
           );
 
-          const responseData = response.data as GeminiResponse;
+          let aggregatedText = "";
+          let buffer = "";
 
-          if (!responseData.candidates || responseData.candidates.length === 0) {
-            throw new Error("Empty response from Gemini API");
+          // Process the stream
+          await new Promise<void>((resolve, reject) => {
+            const stream = response.data;
+
+            stream.on('data', (chunk: Buffer) => {
+              const chunkStr = chunk.toString();
+              buffer += chunkStr;
+
+              // Process buffer to find complete JSON objects
+              // The stream returns a JSON array: [ {...}, {...} ]
+              // We need to handle the opening [, the commas, and the closing ]
+
+              let startIndex = 0;
+
+              // Remove opening bracket if it's the first chunk
+              if (aggregatedText === "" && buffer.trim().startsWith('[')) {
+                const bracketIndex = buffer.indexOf('[');
+                startIndex = bracketIndex + 1;
+              }
+
+              while (true) {
+                // simple heuristic to find potential JSON objects (GenerateContentResponse)
+                // They are separated by commas
+                // We look for the closing brace } followed by a comma, or closing brace at end of buffer (if we assume it's a complete message, but we can't always)
+
+                // A better approach for the Gemini format which is consistent:
+                // each response is a valid JSON object.
+                // We can try to match balanced braces? No, too complex.
+
+                // Let's assume the response chunks are reasonably well-formed or we can use a simpler approach:
+                // Just accumulate text blindly? No, the text is inside the JSON structure.
+
+                // Try to find the pattern: { "candidates": ... }
+                // We can iterate through the buffer and try to parse.
+
+                try {
+                  // This is a naive partial parser
+                  // We'll just look for "text": "..." segments? 
+                  // No, the text might be escaped.
+
+                  // Let's try to parse the buffer as much as possible reducing it
+                  // Identifying boundaries of the JSON objects in the stream array
+
+                  // Quick hack: Just strict parsing of what we can.
+                  // Find the next } that might close an object.
+                  // But filtering lines is easier.
+                } catch (e) { }
+
+                break; // Break the while true loop for now as I will implement a better logic below
+              }
+
+              // Alternative stream processing:
+              // The chunks usually arrive as complete JSON objects wrapped in the array structure.
+              // We can clean the buffer of [ ] and , and try to parse individual objects.
+
+              // Remove [ at start
+              if (buffer.trim().startsWith('[')) {
+                buffer = buffer.replace(/^\s*\[/, '');
+              }
+              // Remove ] at end if it's the very last chunk? We don't know yet.
+              // But we can usually split by "}\n,\n{" or similar.
+
+              // Let's try splitting by the delimiter that separates objects in the array
+              // It's usually ",\r\n" or ","
+
+              // We will accumulate text from successfully parsed objects
+              let processBuffer = buffer;
+              let objectEndIndex = -1;
+
+              // We look for a closing brace that is followed by a comma or is the end
+              // This is still risky. 
+
+              // Let's try a regex for the "text" field format if possible, but JSON structure is safer.
+              // Iterate and attempt JSON.parse on substrings? Expense.
+
+              // Let's try this: 
+              // 1. aggregatedText is what we want to build.
+              // 2. We parse the stream events.
+
+              // Regex to extract text field: "text": "(...)" 
+              // But value is escaped.
+
+              const parts = buffer.split(/,\s*(?={)/); // Split by comma followed by open brace
+
+              // The last part might be incomplete, so we keep it in buffer.
+              // Valid parts we parse and discard.
+
+              if (parts.length > 1) {
+                for (let i = 0; i < parts.length - 1; i++) {
+                  const part = parts[i];
+                  try {
+                    const obj = JSON.parse(part);
+                    const text = obj.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text) {
+                      aggregatedText += text;
+
+                      // Emit partial update
+                      const partialData = this.extractPartialJson(aggregatedText);
+                      if (mainWindow && !signal.aborted) {
+                        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.SOLUTION_STREAM, partialData);
+                      }
+                    }
+                  } catch (e) {
+                    // ignore parse error, maybe it wasn't a full object key?
+                  }
+                }
+
+                buffer = parts[parts.length - 1];
+              }
+
+              // If buffer ends with ] remove it and parse the last object
+              if (buffer.trim().endsWith(']')) {
+                const lastContent = buffer.trim().replace(/\]$/, '');
+                try {
+                  const obj = JSON.parse(lastContent);
+                  const text = obj.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (text) {
+                    aggregatedText += text;
+                    // No need to emit here, final block will handle
+                  }
+                  buffer = "";
+                } catch (e) { }
+              }
+
+            });
+
+            stream.on('end', () => {
+              resolve();
+            });
+
+            stream.on('error', (err: any) => {
+              reject(err);
+            });
+          });
+
+          // Final parse of the complete text
+          const responseText = aggregatedText;
+
+          if (!responseText) {
+            throw new Error("Empty response from Gemini API stream");
           }
-
-          const responseText = responseData.candidates[0].content.parts[0].text;
 
           // Handle when Gemini might wrap the JSON in markdown code blocks
           const jsonText = responseText.replace(/```json|```/g, '').trim();
@@ -1255,6 +1397,90 @@ If you include code examples, use proper markdown code blocks with language spec
     } catch (error: any) {
       console.error("Debug processing error:", error);
       return { success: false, error: error.message || "Failed to process debug request" };
+    }
+  }
+
+  // Helper to extract partial data from JSON string
+  private extractPartialJson(jsonText: string) {
+    const result = {
+      thoughts: [] as string[],
+      code: "",
+      time_complexity: "",
+      space_complexity: ""
+    };
+
+    try {
+      // Try to extract thoughts
+      const thoughtsMatch = jsonText.match(/"thoughts"\s*:\s*\[([\s\S]*?)\]/);
+      if (thoughtsMatch) {
+        const thoughtsContent = thoughtsMatch[1];
+        // simplistic split by quote to get strings
+        const items = thoughtsContent.match(/"([^"]*)"/g);
+        if (items) {
+          result.thoughts = items.map(i => i.slice(1, -1)); // remove quotes
+        }
+      }
+
+      // Try to extract code
+      // Look for "code": " and take everything until parsing fails or end
+      const codeStart = jsonText.indexOf('"code"');
+      if (codeStart !== -1) {
+        const colonQuoteStart = jsonText.indexOf(':"', codeStart);
+        if (colonQuoteStart !== -1) {
+          const contentStart = colonQuoteStart + 2;
+
+          let contentEnd = -1;
+          const nextKeys = ['"thoughts"', '"time_complexity"', '"space_complexity"', '"is_technical"', '}'];
+
+          let minNextIndex = Infinity;
+          for (const key of nextKeys) {
+            const idx = jsonText.indexOf(key, contentStart);
+            if (idx !== -1 && idx < minNextIndex) {
+              minNextIndex = idx;
+            }
+          }
+
+          if (minNextIndex !== Infinity) {
+            // We found a next key. The code content likely ends before that.
+            // Trace back to find the closing quote and comma
+            const commaIndex = jsonText.lastIndexOf(',', minNextIndex);
+            if (commaIndex > contentStart) {
+              const quoteIndex = jsonText.lastIndexOf('"', commaIndex);
+              /* if (quoteIndex > contentStart) {
+                  contentEnd = quoteIndex;
+              } */
+              // Actually, just taking until the quote index is safer?
+              // Be careful about escaped quotes inside the code string.
+              // It's safer to rely on the fact that the next key is unescaped.
+              contentEnd = quoteIndex;
+            }
+          }
+
+          let codeRaw = "";
+          if (contentEnd !== -1) {
+            codeRaw = jsonText.substring(contentStart, contentEnd);
+          } else {
+            // If we didn't find a clean end, just take everything
+            codeRaw = jsonText.substring(contentStart);
+
+            // Remove trailing quote if it exists at the very end (incomplete stream)
+            if (codeRaw.endsWith('"')) {
+              codeRaw = codeRaw.slice(0, -1);
+            }
+          }
+
+          // Unescape standard JSON escapes
+          result.code = codeRaw
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\\\/g, '\\');
+        }
+      }
+
+      return result;
+    } catch (e) {
+      return result;
     }
   }
 

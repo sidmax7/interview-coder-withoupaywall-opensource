@@ -373,6 +373,7 @@ const Solutions: React.FC<SolutionsProps> = ({
         setSpaceComplexityData(solution?.space_complexity || null)
         console.error("Processing error:", error)
       }),
+
       //when the initial solution is generated, we'll set the solution data to that
       window.electronAPI.onSolutionSuccess((data: { code: string; thoughts: string[]; time_complexity: string; space_complexity: string }) => {
         if (!data) {
@@ -411,6 +412,27 @@ const Solutions: React.FC<SolutionsProps> = ({
           }
         }
         fetchScreenshots()
+      }),
+
+      // Handle streaming updates
+      window.electronAPI.onSolutionStream((data: { code: string; thoughts: string[]; time_complexity: string; space_complexity: string }) => {
+        if (!data) return;
+
+        // Update local state for immediate feedback
+        if (data.code) setSolutionData(data.code);
+        if (data.thoughts && data.thoughts.length > 0) setThoughtsData(data.thoughts);
+        // Complexity usually comes at the end, but update if present
+        if (data.time_complexity) setTimeComplexityData(data.time_complexity);
+        if (data.space_complexity) setSpaceComplexityData(data.space_complexity);
+
+        // Update query cache so it persists if we switch tabs/views
+        queryClient.setQueryData(["solution"], (old: any) => ({
+          ...old,
+          code: data.code || old?.code || "",
+          thoughts: (data.thoughts && data.thoughts.length > 0) ? data.thoughts : (old?.thoughts || []),
+          time_complexity: data.time_complexity || old?.time_complexity || "",
+          space_complexity: data.space_complexity || old?.space_complexity || ""
+        }));
       }),
 
       //########################################################

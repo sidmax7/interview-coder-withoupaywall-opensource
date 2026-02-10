@@ -143,9 +143,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
   const [solutionProvider, setSolutionProvider] = useState<APIProvider>("gemini");
   const [debuggingProvider, setDebuggingProvider] = useState<APIProvider>("gemini");
 
-  const [extractionModel, setExtractionModel] = useState("gemini-2.5-flash");
-  const [solutionModel, setSolutionModel] = useState("gemini-2.5-flash");
-  const [debuggingModel, setDebuggingModel] = useState("gemini-2.5-flash");
+  const [extractionModel, setExtractionModel] = useState("gemini-3-flash-preview");
+  const [solutionModel, setSolutionModel] = useState("gemini-3-flash-preview");
+  const [debuggingModel, setDebuggingModel] = useState("gemini-3-flash-preview");
 
   const [systemPrompt, setSystemPrompt] = useState("");
 
@@ -186,9 +186,9 @@ export function SettingsDialog({ open: externalOpen, onOpenChange }: SettingsDia
           setSolutionProvider(config.solutionProvider || fallbackProvider);
           setDebuggingProvider(config.debuggingProvider || fallbackProvider);
 
-          setExtractionModel(config.extractionModel || "gemini-2.5-flash");
-          setSolutionModel(config.solutionModel || "gemini-2.5-flash");
-          setDebuggingModel(config.debuggingModel || "gemini-2.5-flash");
+          setExtractionModel(config.extractionModel || "gemini-3-flash-preview");
+          setSolutionModel(config.solutionModel || "gemini-3-flash-preview");
+          setDebuggingModel(config.debuggingModel || "gemini-3-flash-preview");
 
           setSystemPrompt(config.systemPrompt || "");
 
